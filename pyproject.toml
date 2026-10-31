@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "git-shift"
+dynamic = ["version"]
+description = "Folder-based git identities, with a guard against committing as the wrong account."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Mounaim Belkhoumali" }]
+keywords = ["git", "github", "identity", "multiple-accounts", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+git-shift = "git_shift.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/mounimb/git-shift"
+Issues = "https://github.com/mounimb/git-shift/issues"
+Changelog = "https://github.com/mounimb/git-shift/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/git_shift/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/git_shift"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
