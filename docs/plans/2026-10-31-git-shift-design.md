@@ -1,0 +1,275 @@
+# git-shift — Design
+
+- **Date:** 2026-10-31
+- **Status:** Approved
+- **Author:** Mounaim Belkhoumali (@mounimb)
+
+## Problem
+
+I use several GitHub accounts on the same Windows machine. Git has one global
+identity, so it is easy to commit to a repository with the wrong email. GitHub
+then credits the commit to the wrong account, and the mistake is only visible
+after pushing. On my own `mounimb` repositories, 5 commits are currently
+attributed to my other account because my global `user.email` belongs to it.
+The `gh` CLI adds a second layer: the active `gh` account can also be the wrong
+one, and expired `gh` logins go unnoticed.
+
+## Goal
+
+`git-shift` is a small, dependency-free Python CLI that maps folders to git
+identities (name, email, SSH key, `gh` account), explains which identity applies
+in any directory, and blocks commits and pushes made with the wrong identity.
+
+It is used as a git subcommand: the executable is named `git-shift`, so git runs
+it as `git shift ...`.
+
+### Non-goals (v0.1)
+
+- Storing or managing tokens or passwords.
+- Rewriting existing history.
+- Automatic `gh` account switching (roadmap).
+
+## Approach
+
+Three approaches were considered:
+
+1. **Git-native conditional includes (chosen).** Manage `includeIf "gitdir/i:..."`
+   rules in the global git config, each pointing at one identity file. Works in
+   every git client (terminal, VS Code, GitHub Desktop, IDEs) even when
+   `git-shift` is not running, because it is plain git configuration.
+2. **Per-repository config.** Write `user.email` into each repo's `.git/config`.
+   Simple, but relies on remembering it for every clone. Kept only as the
+   one-off `use --here` command.
+3. **Wrapping the `git` command.** Inject identity flags through a shell
+   wrapper. Breaks GUI clients and is fragile on Windows. Rejected.
+
+A guard (global `pre-commit` and `pre-push` hooks) is added on top of approach 1.
+
+## Commands (v0.1)
+
+| Command | Purpose |
+|---|---|
+| `git shift add <name> --email E --name N --folder DIR [--ssh-key PATH] [--gh LOGIN]` | Create an identity and bind it to a folder |
+| `git shift list` | List identities and their folders |
+| `git shift status` | Show which identity applies in the current directory, why, and the effective email, SSH key and `gh` account |
+| `git shift remove <name>` | Delete an identity and its include rule |
+| `git shift use <name> --here` | Force an identity on the current repository only |
+| `git shift doctor` | Health checks (see Error handling) |
+| `git shift guard install` / `uninstall` | Install or remove the commit/push guard |
+
+Global flag: `--debug` prints tracebacks for unexpected errors.
+
+## Architecture
+
+### Principle: git is the source of truth
+
+`git-shift` never parses or edits `~/.gitconfig` by hand. All reads and writes go
+through `git config` (`--global`, `--file`, `--show-origin`). What `status`
+reports is therefore exactly what git does.
+
+### Files on disk
+
+```
+$XDG_CONFIG_HOME/git-shift/          (default: ~/.config/git-shift/)
+    identities/
+        perso.gitconfig
+        pro.gitconfig
+    hooks/
+        pre-commit
+        pre-push
+    backups/
+        gitconfig-<timestamp>
+    state.gitconfig                  (e.g. previous core.hooksPath, hook launcher path)
+```
+
+An identity file is a regular git config file:
+
+```ini
+[user]
+    name = Mounaim Belkhoumali
+    email = me@example.com
+[core]
+    sshCommand = ssh -i ~/.ssh/id_perso -o IdentitiesOnly=yes
+[gitshift]
+    folder = ~/code/perso/
+    gh = mounimb
+```
+
+The `[gitshift]` section holds metadata git ignores. There is no separate
+database: one file per identity is the single source of truth.
+
+The global config receives one rule per identity:
+
+```ini
+[includeIf "gitdir/i:~/code/perso/"]
+    path = ~/.config/git-shift/identities/perso.gitconfig
+```
+
+`git-shift` recognises its own rules because their `path` points into its
+`identities/` directory. It never modifies other entries.
+
+### Path handling
+
+- Paths are written with forward slashes on every platform.
+- `gitdir/i:` (case-insensitive) is used so rules match on Windows and macOS.
+- A trailing `/` is always added, so the rule covers all subfolders.
+- `~` is preserved in rules for portability.
+
+### Rule ordering
+
+Git applies every matching include in file order; the last one wins. Nested
+folders are allowed (for example `~/code/` = perso and `~/code/pro/` = pro).
+On every change, `git-shift` removes its own rules and re-adds them sorted by
+folder depth, so the most specific folder always wins.
+
+### Modules
+
+```
+src/git_shift/
+    __init__.py
+    __main__.py     python -m git_shift
+    cli.py          argparse parser, subcommands, output formatting, exit codes
+    gitconfig.py    thin subprocess wrapper around `git config`
+    store.py        Identity dataclass; create/list/remove identities and include rules
+    resolve.py      which identity applies in a directory, and why
+    doctor.py       health checks
+    guard.py        hook installation and the commit/push checks
+    gh.py           read-only wrapper around `gh auth status`
+    remotes.py      parse remote URLs (https and scp-like SSH) into host/owner/repo
+```
+
+### Data flow: `add`
+
+1. Validate name, email, folder and SSH key.
+2. Back up the global config (first change only).
+3. Write `identities/<name>.gitconfig` via `git config --file`.
+4. Rewrite `git-shift`'s include rules in depth order via `git config --global`.
+5. If the folder exists, run `resolve` in it and print the effective identity.
+
+### Data flow: `status`
+
+1. Ask git for the effective `user.email`, `user.name` and `core.sshCommand`
+   with `--show-origin`.
+2. Map the origin file back to an identity, or report "global default",
+   "repository-local override" or "none".
+3. Read the expected `gh` login from the identity and compare it with the
+   active `gh` account.
+
+## Guard
+
+### Installation
+
+`git shift guard install` writes `pre-commit` and `pre-push` scripts into
+`~/.config/git-shift/hooks/` and sets the global `core.hooksPath` to that
+directory.
+
+- A global `core.hooksPath` disables repositories' own `.git/hooks`. After its
+  check, each guard script runs the repository's own hook of the same name if
+  it exists and is executable.
+- If a global `core.hooksPath` already exists, its value is saved in
+  `state.gitconfig` and that hook is chained too. `uninstall` restores it.
+- The absolute path of the `git-shift` launcher (or `python -m git_shift` with
+  the interpreter path) is recorded at install time, so hooks work when
+  `git-shift` is not on `PATH`, for example inside a virtualenv.
+- Hook scripts are POSIX `sh`, which Git for Windows runs through its bundled
+  shell.
+
+### Rules
+
+| Hook | Rule |
+|---|---|
+| `pre-commit` | If the repository is inside an identity's folder, the effective `user.email` must equal that identity's email. |
+| `pre-commit` | If the repository is outside every folder but its `origin` owner matches an identity's `gh` login, that identity's email is required. |
+| `pre-push` | Every commit being pushed (from the ranges git passes on stdin) must have the expected author email. |
+
+Blocked output:
+
+```
+✗ git-shift: this repo belongs to "perso" (mounimb), but you're committing as pro@company.com
+  fix:    git shift use perso --here
+  bypass: git commit --no-verify
+```
+
+### Failure policy
+
+If `git-shift` itself fails unexpectedly inside a hook, the hook prints a
+warning and exits 0. A bug in the tool must never block every commit on the
+machine.
+
+## `gh` integration (v0.1, read-only)
+
+- Read the active account and login validity from `gh auth status`, using JSON
+  output when the installed `gh` supports it and text parsing otherwise.
+- `status` and `doctor` report the expected vs active account, invalid logins,
+  and the exact fix command (`gh auth switch -u <login>`).
+- If `gh` is not installed, these checks are skipped.
+
+## Error handling
+
+### Validation in `add`
+
+- Invalid email, duplicate name, or a name outside `[a-z0-9_-]` is refused.
+- A folder that does not exist yet is allowed with a warning.
+- A missing SSH key file produces a warning.
+
+### Checks in `doctor` and explanations in `status`
+
+| Situation | Message |
+|---|---|
+| A repository-local `user.email` overrides the folder rule | "overridden by this repo's local config (.git/config)" |
+| The default `[user]` block comes after `git-shift`'s rules in the global config | "your default config overrides git-shift rules" + fix |
+| The repository sets its own `core.hooksPath` (husky, pre-commit), so the guard does not run | "guard inactive in this repo" |
+| Identity folder or SSH key missing | warning / error |
+| Invalid `gh` login | error + fix command |
+| Git older than 2.13 (no `includeIf`) | error with the minimum version |
+
+### Safety
+
+- The global config is backed up before the first change.
+- Only `git-shift`'s own entries are ever modified or removed.
+- `remove` and `guard uninstall` fully revert their changes.
+
+### Exit codes
+
+- `0` success
+- `1` a check failed (`doctor` problems, guard block)
+- `2` usage error
+
+Expected errors print a one-line message; `--debug` adds the traceback.
+
+## Testing
+
+- **pytest**, no network.
+- **Unit tests:** path normalisation (Windows and POSIX), rule ordering, remote
+  URL parsing (`https://github.com/o/r`, `git@github.com:o/r.git`,
+  `ssh://git@github.com/o/r`), validation.
+- **Integration tests with real git:** every test runs with a temporary `HOME`,
+  `USERPROFILE` and `XDG_CONFIG_HOME`, and `GIT_CONFIG_NOSYSTEM=1`, so the
+  developer's real config is never read or written. Tests create repositories
+  inside identity folders, run real `git commit`, and assert the author email.
+  Guard tests cover a blocked commit and a pre-push check against a local bare
+  remote.
+- **`gh`:** a fake `gh` executable on `PATH` returns canned output.
+- **CI (GitHub Actions):** Ubuntu, Windows and macOS × Python 3.9 and 3.13,
+  plus `ruff`.
+
+## Packaging and release
+
+- `pyproject.toml`, `src/` layout, build backend `hatchling` (build-time only).
+- Zero runtime dependencies; Python 3.9+.
+- Console script: `git-shift = git_shift.cli:main`.
+- Tag `v0.1.0` → GitHub Release → PyPI via Trusted Publishing (no API token
+  stored anywhere).
+- Repository files: `README.md`, `LICENSE` (MIT), `CHANGELOG.md`, `ROADMAP.md`,
+  `.gitignore`.
+
+## Roadmap (post-v0.1)
+
+- Match identities by remote URL (`includeIf "hasconfig:remote.*.url:..."`,
+  git 2.36+) in addition to folders.
+- `git shift fix`: correct the author of unpushed commits.
+- `git shift ssh new <name>`: generate an SSH key and add it to GitHub via `gh`.
+- Automatic `gh` account switching per folder.
+- Per-identity commit signing (SSH or GPG).
+- Import an existing setup from `~/.gitconfig` and `~/.ssh/config`.
+- Shell completion; Scoop and Homebrew packages.
