@@ -129,7 +129,7 @@ The global config receives a single line, added once with
 - Glob characters in folder names (`[`, `*`, `?`, `\`) are escaped in the
   `includeIf` key, because git matches `gitdir` patterns with wildmatch. The
   stored folder stays literal.
-- `status` and the guard match folders against the repository's git directory,
+- `status`, `doctor` and the guard match folders against the repository's git directory,
   as `gitdir` does, so a worktree follows the folder of its main clone.
 
 ### Rule ordering
