@@ -54,6 +54,7 @@ def test_get_with_origin_from_a_subfolder_is_absolute(home, make_repo, tmp_path)
     git(repo, "config", "user.email", "local@example.com")
     origin = gitconfig.get_with_origin("user.email", cwd=repo / "sub")
     assert Path(origin.path).resolve() == (repo / ".git" / "config").resolve()
+    assert "\\" not in origin.path
 
 
 def test_unset_missing_key_is_not_an_error(home, tmp_path):
@@ -99,6 +100,12 @@ def test_get_returns_the_last_of_several_values(home):
     gitconfig.add_value("include.path", "/a", scope="global")
     gitconfig.add_value("include.path", "/b", scope="global")
     assert gitconfig.get("include.path", scope="global") == "/b"
+
+
+def test_add_value_creates_the_file_folder(home, tmp_path):
+    path = tmp_path / "new" / "c.gitconfig"
+    gitconfig.add_value("include.path", "/a", file=path)
+    assert gitconfig.get_all("include.path", file=path) == ["/a"]
 
 
 def test_unset_removes_every_value(home):

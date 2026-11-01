@@ -29,6 +29,7 @@ def run_git(
         proc = subprocess.run(
             [exe, *args],
             cwd=cwd,
+            stdin=subprocess.DEVNULL,  # inside hooks, stdin belongs to git (pre-push refs)
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -50,7 +51,10 @@ def _where(scope: str | None, file: str | Path | None) -> list[str]:
 
 
 def _read(args: list[str], cwd) -> str | None:
-    """stdout of a `git config` read; None when the key is missing (exit code 1)."""
+    """stdout of a `git config` read; None when the key is missing (exit code 1).
+
+    git also exits 1 for a malformed key name, so keys must be constants, never user input.
+    """
     proc = run_git("config", *args, cwd=cwd, check=False)
     if proc.returncode == 1:
         return None
@@ -78,7 +82,7 @@ def get_with_origin(key: str, *, cwd=None) -> Origin | None:
     kind, _, path = origin.partition(":")
     if kind == "file" and path and not os.path.isabs(path):
         top = run_git("rev-parse", "--show-toplevel", cwd=cwd, check=False).stdout.strip()
-        path = os.path.join(top or os.fspath(cwd or os.getcwd()), path)
+        path = paths.to_git_path(os.path.join(top or os.fspath(cwd or os.getcwd()), path))
     return Origin(kind=kind, path=path, value=value)
 
 
@@ -107,8 +111,10 @@ def set_value(key: str, value: str, *, scope=None, file=None, cwd=None) -> None:
     run_git("config", *_where(scope, file), key, value, cwd=cwd)
 
 
-def add_value(key: str, value: str, *, scope=None, file=None) -> None:
-    run_git("config", *_where(scope, file), "--add", key, value)
+def add_value(key: str, value: str, *, scope=None, file=None, cwd=None) -> None:
+    if file is not None:
+        Path(file).parent.mkdir(parents=True, exist_ok=True)
+    run_git("config", *_where(scope, file), "--add", key, value, cwd=cwd)
 
 
 def unset(key: str, *, scope=None, file=None, cwd=None) -> None:
