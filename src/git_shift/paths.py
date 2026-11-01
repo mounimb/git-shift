@@ -7,8 +7,18 @@ from pathlib import Path
 
 
 def home() -> Path:
-    """Home directory as git resolves it: HOME first, then USERPROFILE (Windows)."""
-    value = os.environ.get("HOME") or os.environ.get("USERPROFILE")
+    """Home directory as git resolves it.
+
+    HOME wins. Without it, Git for Windows tries HOMEDRIVE + HOMEPATH (if that folder
+    exists), then USERPROFILE, and exports the result as HOME to hooks.
+    """
+    value = os.environ.get("HOME")
+    if not value and os.name == "nt":
+        drive, path = os.environ.get("HOMEDRIVE"), os.environ.get("HOMEPATH")
+        if drive and path and os.path.isdir(drive + path):
+            value = drive + path
+        else:
+            value = os.environ.get("USERPROFILE")
     return Path(value) if value else Path.home()
 
 
