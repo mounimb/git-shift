@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from .errors import GitShiftError
 @dataclass(frozen=True)
 class Origin:
     kind: str  # "file", "command line", "blob", "standard input"
-    path: str  # config file path when kind == "file", else ""
+    path: str  # absolute config file path when kind == "file", else ""
     value: str
 
 
@@ -75,6 +76,9 @@ def get_with_origin(key: str, *, cwd=None) -> Origin | None:
         return None
     origin, value = out.split("\0")[:2]
     kind, _, path = origin.partition(":")
+    if kind == "file" and path and not os.path.isabs(path):
+        top = run_git("rev-parse", "--show-toplevel", cwd=cwd, check=False).stdout.strip()
+        path = os.path.join(top or os.fspath(cwd or os.getcwd()), path)
     return Origin(kind=kind, path=path, value=value)
 
 

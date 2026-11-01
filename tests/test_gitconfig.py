@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 from helpers import git
@@ -45,6 +46,14 @@ def test_get_with_origin_reports_the_file(home, make_repo, tmp_path):
     assert origin.kind == "file"
     assert origin.value == "local@example.com"
     assert origin.path.replace("\\", "/").endswith(".git/config")
+
+
+def test_get_with_origin_from_a_subfolder_is_absolute(home, make_repo, tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    (repo / "sub").mkdir()
+    git(repo, "config", "user.email", "local@example.com")
+    origin = gitconfig.get_with_origin("user.email", cwd=repo / "sub")
+    assert Path(origin.path).resolve() == (repo / ".git" / "config").resolve()
 
 
 def test_unset_missing_key_is_not_an_error(home, tmp_path):
