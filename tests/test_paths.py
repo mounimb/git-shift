@@ -75,6 +75,25 @@ def test_is_within_matches_folder_and_subfolders_case_insensitively(tmp_path):
     assert not paths.is_within(tmp_path / "Codebase", rule)
 
 
+def test_is_within_rejects_malformed_rules(tmp_path):
+    assert not paths.is_within(tmp_path / "code", "")
+    bare = paths.to_folder_rule(tmp_path / "Code").rstrip("/")
+    assert not paths.is_within(tmp_path / "Codebase", bare)
+
+
+def test_to_folder_rule_resolves_symlinks(tmp_path):
+    target = tmp_path / "real"
+    target.mkdir()
+    link = tmp_path / "link"
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not permitted here")
+    rule = paths.to_folder_rule(target)
+    assert paths.to_folder_rule(link) == rule
+    assert paths.is_within(link / "app", rule)
+
+
 def test_depth_counts_segments():
     assert paths.depth("C:/Users/me/code/") == 4
     assert paths.depth("/home/me/code/") == 3

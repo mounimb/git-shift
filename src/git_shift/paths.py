@@ -66,7 +66,7 @@ def expand(path: str) -> str:
 def to_git_path(path: str | os.PathLike[str]) -> str:
     """Absolute, symlink-resolved path with forward slashes (what git config expects)."""
     resolved = os.path.realpath(expand(os.fspath(path)))
-    return resolved.replace("\\", "/")
+    return resolved.replace("\\", "/") if os.sep == "\\" else resolved
 
 
 def to_folder_rule(path: str | os.PathLike[str]) -> str:
@@ -85,6 +85,8 @@ def gitdir_pattern(folder_rule: str) -> str:
 
 def is_within(path: str | os.PathLike[str], folder_rule: str) -> bool:
     """True if path is the folder itself or inside it. Case-insensitive, like gitdir/i."""
+    if not folder_rule.endswith("/"):
+        return False  # not made by to_folder_rule (empty or hand-edited)
     return to_folder_rule(path).casefold().startswith(folder_rule.casefold())
 
 
