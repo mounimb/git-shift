@@ -302,4 +302,5 @@ Expected errors print a one-line message; `--debug` adds the traceback.
 - Automatic `gh` account switching per folder.
 - Per-identity commit signing (SSH or GPG).
 - Import an existing setup from `~/.gitconfig` and `~/.ssh/config`.
+- Recognise SSH host aliases (`git@github-work:...`) in the origin-owner check.
 - Shell completion; Scoop and Homebrew packages.
