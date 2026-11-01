@@ -62,3 +62,8 @@ def test_run_git_never_uses_a_git_from_the_current_directory(home, monkeypatch):
     monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
     monkeypatch.setenv("PATH", os.pathsep.join([".", os.environ["PATH"]]))
     assert gitconfig.run_git("--version").stdout.startswith("git version")
+
+
+def test_home_fixture_hides_every_real_config(home):
+    proc = gitconfig.run_git("config", "--show-origin", "--list", check=False)
+    assert proc.stdout == ""
