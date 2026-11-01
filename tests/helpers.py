@@ -29,7 +29,11 @@ def git(cwd: Path, *args: str) -> str:
 
 
 def write_fake_gh(directory: Path, output: str) -> Path:
-    """Create a fake `gh` executable that prints `output`, whatever its arguments."""
+    """Create a fake `gh` executable that prints `output`, whatever its arguments.
+
+    On Windows it is a .cmd script, which paths.find_executable() never picks up, so
+    tests inject it by patching gh._executable rather than through PATH.
+    """
     data = directory / "gh-output.txt"
     data.write_text(output, encoding="utf-8")
     if os.name == "nt":

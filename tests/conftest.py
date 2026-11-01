@@ -5,7 +5,7 @@ import os
 import pytest
 from helpers import git
 
-from git_shift import gh  # placeholder until Task 11, see the note below
+from git_shift import gh
 
 
 @pytest.fixture
