@@ -1,3 +1,5 @@
+import os
+
 from helpers import git
 
 from git_shift import gitconfig
@@ -50,3 +52,13 @@ def test_unset_missing_key_is_not_an_error(home, tmp_path):
 
 def test_git_version_is_recent_enough():
     assert gitconfig.git_version() >= (2, 13)
+
+
+def test_run_git_never_uses_a_git_from_the_current_directory(home, monkeypatch):
+    planted = home / ("git.exe" if os.name == "nt" else "git")
+    planted.write_text("#!/bin/sh\necho planted\n", encoding="utf-8")
+    planted.chmod(0o755)
+    monkeypatch.chdir(home)
+    monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
+    monkeypatch.setenv("PATH", os.pathsep.join([".", os.environ["PATH"]]))
+    assert gitconfig.run_git("--version").stdout.startswith("git version")

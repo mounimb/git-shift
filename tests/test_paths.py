@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 
@@ -97,3 +98,20 @@ def test_to_folder_rule_resolves_symlinks(tmp_path):
 def test_depth_counts_segments():
     assert paths.depth("C:/Users/me/code/") == 4
     assert paths.depth("/home/me/code/") == 3
+
+
+def test_find_executable_skips_relative_path_entries(monkeypatch, tmp_path):
+    name = "git.exe" if os.name == "nt" else "git"
+    planted = tmp_path / name
+    planted.write_text("#!/bin/sh\necho planted\n", encoding="utf-8")
+    planted.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", os.pathsep.join([".", "", os.environ["PATH"]]))
+    found = paths.find_executable("git")
+    assert found is not None and os.path.isabs(found)
+    assert Path(found).resolve().parent != tmp_path.resolve()
+
+
+def test_find_executable_returns_none_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert paths.find_executable("git") is None

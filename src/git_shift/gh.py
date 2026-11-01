@@ -1,7 +1,9 @@
 """Read-only view of the GitHub CLI's accounts (implemented in Task 11)."""
 
-import shutil
+from __future__ import annotations
+
+from . import paths
 
 
 def _executable() -> str | None:
-    return shutil.which("gh")
+    return paths.find_executable("gh")

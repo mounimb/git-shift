@@ -7,6 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import paths
 from .errors import GitShiftError
 
 
@@ -20,17 +21,20 @@ class Origin:
 def run_git(
     *args: str, cwd: str | Path | None = None, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
+    exe = paths.find_executable("git")
+    if exe is None:
+        raise GitShiftError("git is not installed or not on PATH")
     try:
         proc = subprocess.run(
-            ["git", *args],
+            [exe, *args],
             cwd=cwd,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
         )
-    except FileNotFoundError as exc:
-        raise GitShiftError("git is not installed or not on PATH") from exc
+    except OSError as exc:
+        raise GitShiftError(f"cannot run git: {exc}") from exc
     if check and proc.returncode != 0:
         raise GitShiftError(f"`git {' '.join(args)}` failed: {proc.stderr.strip()}")
     return proc

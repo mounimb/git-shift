@@ -92,3 +92,21 @@ def is_within(path: str | os.PathLike[str], folder_rule: str) -> bool:
 
 def depth(folder_rule: str) -> int:
     return len([part for part in folder_rule.split("/") if part])
+
+
+def find_executable(name: str) -> str | None:
+    """Absolute path of a program on PATH, never one from the current directory.
+
+    Windows starts a bare program name from the current directory before PATH, so a
+    repository could ship its own git.exe. Only absolute PATH entries are searched, and
+    only .exe files on Windows.
+    """
+    filename = f"{name}.exe" if os.name == "nt" else name
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        directory = directory.strip('"')
+        if not os.path.isabs(directory):
+            continue  # "", "." and relative entries would resolve inside the repository
+        candidate = os.path.join(directory, filename)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
