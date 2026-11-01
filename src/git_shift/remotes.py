@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_URL = re.compile(r"^(?:https?|ssh|git)://(?:[^@/]+@)?(?P<host>[^:/]+)(?::\d+)?/(?P<path>.+)$")
+_URL = re.compile(
+    r"^(?:https?|ssh|git|git\+ssh|ssh\+git)://(?:[^@/]+@)?(?P<host>[^:/]+)(?::\d+)?/(?P<path>.+)$"
+)
 _SCP = re.compile(r"^(?:[^@/]+@)?(?P<host>[^:/]+):(?P<path>[^/].*)$")
 
 

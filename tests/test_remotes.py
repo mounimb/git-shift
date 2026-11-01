@@ -16,6 +16,8 @@ from git_shift.remotes import Remote, parse_remote
         "https://x-access-token:TOKEN@github.com/mounimb/git-shift.git",
         "https://github.com/mounimb/git-shift/",
         "  git@github.com:mounimb/git-shift.git\n",
+        "git+ssh://git@github.com/mounimb/git-shift.git",
+        "ssh+git://git@github.com/mounimb/git-shift",
     ],
 )
 def test_parses_github_urls(url):
