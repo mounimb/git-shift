@@ -62,6 +62,12 @@ def test_to_folder_rule_adds_one_trailing_slash(tmp_path):
     assert paths.to_folder_rule(rule) == rule
 
 
+def test_gitdir_pattern_escapes_wildmatch_characters():
+    assert paths.gitdir_pattern("/x/code [old]/") == "/x/code \\[old]/"
+    assert paths.gitdir_pattern("/x/a*b?/") == "/x/a\\*b\\?/"
+    assert paths.gitdir_pattern("C:/Users/me/code/") == "C:/Users/me/code/"
+
+
 def test_is_within_matches_folder_and_subfolders_case_insensitively(tmp_path):
     rule = paths.to_folder_rule(tmp_path / "Code")
     assert paths.is_within(tmp_path / "Code", rule)

@@ -93,7 +93,7 @@ An identity file is a regular git config file:
 [core]
     sshCommand = ssh -i ~/.ssh/id_perso -o IdentitiesOnly=yes
 [gitshift]
-    folder = ~/code/perso/
+    folder = C:/Users/me/code/perso/
     gh = mounimb
 ```
 
@@ -126,6 +126,7 @@ The global config receives a single line, added once with
   the resolved `.git` path first and `~` differs between Windows shells.
 - `gitdir/i:` (case-insensitive) is used so rules match on Windows and macOS.
 - A trailing `/` is always added, so the rule covers all subfolders.
+- Glob characters in folder names (`[`, `*`, `?`, `\`) are escaped in the `includeIf` key, because git matches `gitdir` patterns with wildmatch. The stored folder stays literal.
 
 ### Rule ordering
 

@@ -75,6 +75,14 @@ def to_folder_rule(path: str | os.PathLike[str]) -> str:
     return git_path if git_path.endswith("/") else git_path + "/"
 
 
+_WILDMATCH_SPECIAL = str.maketrans({c: "\\" + c for c in "\\*?["})
+
+
+def gitdir_pattern(folder_rule: str) -> str:
+    """Escape wildmatch characters so an includeIf gitdir rule matches the folder literally."""
+    return folder_rule.translate(_WILDMATCH_SPECIAL)
+
+
 def is_within(path: str | os.PathLike[str], folder_rule: str) -> bool:
     """True if path is the folder itself or inside it. Case-insensitive, like gitdir/i."""
     return to_folder_rule(path).casefold().startswith(folder_rule.casefold())
