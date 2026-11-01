@@ -12,6 +12,10 @@ from git_shift.remotes import Remote, parse_remote
         "git@github.com:mounimb/git-shift.git",
         "ssh://git@github.com/mounimb/git-shift.git",
         "ssh://git@github.com:22/mounimb/git-shift",
+        "github.com:mounimb/git-shift",
+        "https://x-access-token:TOKEN@github.com/mounimb/git-shift.git",
+        "https://github.com/mounimb/git-shift/",
+        "  git@github.com:mounimb/git-shift.git\n",
     ],
 )
 def test_parses_github_urls(url):
@@ -35,3 +39,8 @@ def test_host_is_lowercased():
 )
 def test_rejects_local_paths_and_incomplete_urls(url):
     assert parse_remote(url) is None
+
+
+def test_ssh_alias_host_is_kept_verbatim():
+    # git@github-work:... aliases are not resolved; the remote check only knows github.com
+    assert parse_remote("git@github-work:o/r").host == "github-work"

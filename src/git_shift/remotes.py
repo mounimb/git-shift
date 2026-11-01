@@ -17,6 +17,10 @@ class Remote:
 
 
 def parse_remote(url: str) -> Remote | None:
+    """Split a network remote into host (lowercased) / owner (first path segment) / repo.
+
+    Returns None for local paths and unrecognised forms; callers treat None as "no check".
+    """
     url = url.strip()
     match = _URL.match(url) or _SCP.match(url)
     if match is None:
