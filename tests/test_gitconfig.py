@@ -58,10 +58,11 @@ def test_get_with_origin_from_a_subfolder_is_absolute(home, make_repo, tmp_path)
 
 def test_unset_missing_key_is_not_an_error(home, tmp_path):
     gitconfig.unset("user.email", file=tmp_path / "c.gitconfig")
+    assert not (tmp_path / "c.gitconfig").exists()
     gitconfig.unset("user.email", scope="global")
 
 
-def test_git_version_is_recent_enough():
+def test_git_version_is_recent_enough(home):
     assert gitconfig.git_version() >= (2, 13)
 
 
@@ -92,3 +93,16 @@ def test_broken_config_file_raises(home, tmp_path):
 def test_list_entries_of_missing_config_is_empty(home, tmp_path):
     assert gitconfig.list_entries(file=tmp_path / "missing.gitconfig") == []
     assert gitconfig.list_entries(scope="global") == []
+
+
+def test_get_returns_the_last_of_several_values(home):
+    gitconfig.add_value("include.path", "/a", scope="global")
+    gitconfig.add_value("include.path", "/b", scope="global")
+    assert gitconfig.get("include.path", scope="global") == "/b"
+
+
+def test_unset_removes_every_value(home):
+    gitconfig.add_value("include.path", "/a", scope="global")
+    gitconfig.add_value("include.path", "/b", scope="global")
+    gitconfig.unset("include.path", scope="global")
+    assert gitconfig.get_all("include.path", scope="global") == []
