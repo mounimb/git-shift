@@ -48,31 +48,47 @@ def _where(scope: str | None, file: str | Path | None) -> list[str]:
     return []
 
 
+def _read(args: list[str], cwd) -> str | None:
+    """stdout of a `git config` read; None when the key is missing (exit code 1)."""
+    proc = run_git("config", *args, cwd=cwd, check=False)
+    if proc.returncode == 1:
+        return None
+    if proc.returncode != 0:
+        raise GitShiftError(f"git config failed: {proc.stderr.strip()}")
+    return proc.stdout
+
+
 def get(key: str, *, scope=None, file=None, cwd=None) -> str | None:
-    proc = run_git("config", *_where(scope, file), "-z", "--get", key, cwd=cwd, check=False)
-    return proc.stdout.split("\0")[0] if proc.returncode == 0 else None
+    out = _read([*_where(scope, file), "-z", "--get", key], cwd)
+    return None if out is None else out.split("\0")[0]
 
 
 def get_all(key: str, *, scope=None, file=None, cwd=None) -> list[str]:
-    proc = run_git("config", *_where(scope, file), "-z", "--get-all", key, cwd=cwd, check=False)
-    return proc.stdout.split("\0")[:-1] if proc.returncode == 0 else []
+    out = _read([*_where(scope, file), "-z", "--get-all", key], cwd)
+    return [] if out is None else out.split("\0")[:-1]
 
 
 def get_with_origin(key: str, *, cwd=None) -> Origin | None:
     """Effective value of `key` in `cwd` and the place it comes from."""
-    proc = run_git("config", "--show-origin", "-z", "--get", key, cwd=cwd, check=False)
-    if proc.returncode != 0:
+    out = _read(["--show-origin", "-z", "--get", key], cwd)
+    if out is None:
         return None
-    origin, value = proc.stdout.split("\0")[:2]
+    origin, value = out.split("\0")[:2]
     kind, _, path = origin.partition(":")
     return Origin(kind=kind, path=path, value=value)
 
 
 def list_entries(*, scope=None, file=None, cwd=None) -> list[tuple[str, str]]:
-    """All (key, value) pairs in file order. Keys come back lowercased except subsections."""
-    proc = run_git("config", *_where(scope, file), "-z", "--list", cwd=cwd, check=False)
-    if proc.returncode != 0:
+    """All (key, value) pairs in file order; --file and --global do not follow includes.
+
+    Keys come back lowercased except subsections; a key without a value reads as "true".
+    A config file that does not exist yet gives [].
+    """
+    if file is not None and not Path(file).exists():
         return []
+    if scope == "global" and not any(path.is_file() for path in paths.global_config_files()):
+        return []
+    proc = run_git("config", *_where(scope, file), "-z", "--list", cwd=cwd)
     entries = []
     for record in proc.stdout.split("\0"):
         if record:

@@ -56,6 +56,14 @@ def xdg_git_config() -> Path:
     return _xdg_config_home() / "git" / "config"
 
 
+def global_config_files() -> tuple[Path, ...]:
+    """Candidate global config files. GIT_CONFIG_GLOBAL replaces both defaults, as in git."""
+    override = os.environ.get("GIT_CONFIG_GLOBAL")
+    if override:
+        return (Path(override),)
+    return (home() / ".gitconfig", xdg_git_config())
+
+
 def expand(path: str) -> str:
     """Expand a leading ~ with the same home directory git uses."""
     if path == "~" or path.startswith(("~/", "~\\")):

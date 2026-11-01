@@ -1,8 +1,10 @@
 import os
 
+import pytest
 from helpers import git
 
 from git_shift import gitconfig
+from git_shift.errors import GitShiftError
 
 
 def test_set_and_get_in_file(home, tmp_path):
@@ -67,3 +69,17 @@ def test_run_git_never_uses_a_git_from_the_current_directory(home, monkeypatch):
 def test_home_fixture_hides_every_real_config(home):
     proc = gitconfig.run_git("config", "--show-origin", "--list", check=False)
     assert proc.stdout == ""
+
+
+def test_broken_config_file_raises(home, tmp_path):
+    path = tmp_path / "bad.gitconfig"
+    path.write_text("[user\n", encoding="utf-8")
+    with pytest.raises(GitShiftError):
+        gitconfig.get("user.email", file=path)
+    with pytest.raises(GitShiftError):
+        gitconfig.list_entries(file=path)
+
+
+def test_list_entries_of_missing_config_is_empty(home, tmp_path):
+    assert gitconfig.list_entries(file=tmp_path / "missing.gitconfig") == []
+    assert gitconfig.list_entries(scope="global") == []

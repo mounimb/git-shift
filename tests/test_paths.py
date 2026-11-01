@@ -115,3 +115,15 @@ def test_find_executable_skips_relative_path_entries(monkeypatch, tmp_path):
 def test_find_executable_returns_none_when_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", str(tmp_path))
     assert paths.find_executable("git") is None
+
+
+def test_global_config_files_honours_git_config_global(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    assert paths.global_config_files() == (
+        tmp_path / ".gitconfig",
+        tmp_path / ".config" / "git" / "config",
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "custom"))
+    assert paths.global_config_files() == (tmp_path / "custom",)
