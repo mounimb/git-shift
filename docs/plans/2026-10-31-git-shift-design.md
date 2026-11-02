@@ -256,7 +256,9 @@ machine.
 
 - The global config is backed up before the first change.
 - Only `git-shift`'s own entries are ever modified or removed.
-- `remove` and `guard uninstall` fully revert their changes.
+- `remove` deletes the identity and its rule, and `guard uninstall` removes the hooks and
+  `core.hooksPath`. The single `include.path` line stays after the last identity is
+  removed; it is harmless, and the README shows how to delete it by hand.
 
 ### Exit codes
 
