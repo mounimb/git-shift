@@ -195,25 +195,31 @@ def keys_after_global_include() -> list[str] | None:
         if key in IDENTITY_KEYS:
             late.add(key)
         elif key == "include.path" or (key.startswith("includeif.") and key.endswith(".path")):
-            included = gitconfig.list_entries(file=_include_target(value))
+            try:
+                included = gitconfig.list_entries(file=_include_target(value))
+            except GitShiftError:
+                continue  # unreadable or malformed: git reports it itself when the include applies
             late.update(k for k, _ in included if k in IDENTITY_KEYS)
     return sorted(late)
 
 
 def _inherited_ssh_key_warnings(new: Identity, existing: list[Identity]) -> list[str]:
-    """git applies every matching rule, so an identity nested in another one's folder keeps
-    the outer core.sshCommand unless it sets its own SSH key."""
+    """git applies every matching rule, so an identity without an SSH key inside another
+    identity's folder uses the SSH key of the deepest enclosing identity that has one."""
+    everyone = [i for i in [*existing, new] if i.folder]
     warnings = []
-    for other in existing:
-        if not other.folder:
+    for inner in everyone:
+        if inner.ssh_key:
             continue
-        if paths.is_within(new.folder, other.folder):
-            outer, inner = other, new
-        elif paths.is_within(other.folder, new.folder):
-            outer, inner = new, other
-        else:
+        outers = [
+            o
+            for o in everyone
+            if o is not inner and o.ssh_key and paths.is_within(inner.folder, o.folder)
+        ]
+        if not outers:
             continue
-        if outer.ssh_key and not inner.ssh_key:
+        outer = max(outers, key=lambda o: paths.depth(o.folder))
+        if new is inner or new is outer:
             warnings.append(
                 f'"{inner.name}" is inside the folder of "{outer.name}" and has no SSH key, '
                 f"so git uses {outer.ssh_key} there"

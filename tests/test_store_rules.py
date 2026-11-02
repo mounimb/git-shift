@@ -151,6 +151,14 @@ def test_outer_identity_added_after_the_inner_one_warns_too(home):
     assert any('"pro"' in w and "id_perso" in w for w in warnings)
 
 
+def test_three_levels_name_the_deepest_ssh_key(home):
+    add(home, "perso", "code", ssh_key=str(home / ".ssh" / "id_perso"))
+    add(home, "pro", "code/pro", ssh_key=str(home / ".ssh" / "id_pro"))
+    _, warnings = add(home, "lab", "code/pro/lab")
+    inherited = [w for w in warnings if '"lab"' in w]
+    assert len(inherited) == 1 and "id_pro" in inherited[0]
+
+
 def test_add_warns_about_a_user_include_if_after_the_git_shift_include(home):
     (home / ".gitconfig.work").write_text("[user]\n\temail = old@example.com\n", encoding="utf-8")
     (home / ".gitconfig").write_text(
@@ -160,6 +168,17 @@ def test_add_warns_about_a_user_include_if_after_the_git_shift_include(home):
     )
     _, warnings = add(home)
     assert any("user.email" in w and "can override" in w for w in warnings)
+
+
+def test_unreadable_include_after_git_shift_does_not_fail_add(home):
+    (home / ".gitconfig-old").write_text("[user\n", encoding="utf-8")
+    (home / ".gitconfig").write_text(
+        "[include]\n\tpath = ~/.gitconfig.local\n"
+        '[includeIf "gitdir/i:~/old/"]\n\tpath = ~/.gitconfig-old\n',
+        encoding="utf-8",
+    )
+    identity, _ = add(home)
+    assert identity.path.is_file()
 
 
 def test_relative_include_of_the_rules_file_is_recognised(home, monkeypatch):
