@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 from dataclasses import dataclass
@@ -10,8 +11,8 @@ from pathlib import Path
 from . import gitconfig, paths
 from .errors import GitShiftError
 
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")  # used with fullmatch
+EMAIL_RE = re.compile(r'[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+')  # git strips <>" from idents
 
 
 @dataclass(frozen=True)
@@ -19,7 +20,7 @@ class Identity:
     name: str
     email: str
     user_name: str
-    folder: str  # folder rule: absolute, forward slashes, trailing "/"
+    folder: str  # folder rule: absolute, forward slashes, trailing "/"; "" if unusable
     ssh_key: str | None = None
     gh: str | None = None
 
@@ -33,25 +34,29 @@ def identity_path(name: str) -> Path:
 
 
 def validate_name(name: str) -> None:
-    if not NAME_RE.match(name):
+    if not NAME_RE.fullmatch(name):
         raise GitShiftError(
-            f'invalid identity name "{name}": use lowercase letters, digits, "-" and "_"'
+            f'invalid identity name "{name}": use lowercase letters, digits, "-" and "_", '
+            "starting with a letter or digit"
         )
 
 
 def validate_email(email: str) -> None:
-    if not EMAIL_RE.match(email):
+    if not EMAIL_RE.fullmatch(email):
         raise GitShiftError(f'invalid email "{email}"')
 
 
 def ssh_command(key_path: str) -> str:
+    # git runs core.sshCommand through sh, also on Windows, so POSIX quoting is right
     return f"ssh -i {shlex.quote(key_path)} -o IdentitiesOnly=yes"
 
 
 def save(identity: Identity) -> None:
+    """Write the identity file in one step, so a failure never leaves a partial file."""
+    validate_name(identity.name)
     path = identity.path
-    if path.exists():
-        path.unlink()
+    tmp = path.with_name(path.name + ".tmp")  # not matched by *.gitconfig
+    tmp.unlink(missing_ok=True)
     entries = [("user.name", identity.user_name), ("user.email", identity.email)]
     if identity.ssh_key:
         entries.append(("core.sshCommand", ssh_command(identity.ssh_key)))
@@ -61,7 +66,8 @@ def save(identity: Identity) -> None:
     if identity.gh:
         entries.append(("gitshift.gh", identity.gh))
     for key, value in entries:
-        gitconfig.set_value(key, value, file=path)
+        gitconfig.set_value(key, value, file=tmp)
+    os.replace(tmp, path)
 
 
 def load(name: str) -> Identity:
@@ -70,12 +76,13 @@ def load(name: str) -> Identity:
     if not path.is_file():
         raise GitShiftError(f'no identity named "{name}"')
     values = dict(gitconfig.list_entries(file=path))  # one git call per identity
-    folder = values.get("gitshift.folder")
+    folder = values.get("gitshift.folder", "")
     return Identity(
         name=name,
         email=values.get("user.email", ""),
         user_name=values.get("user.name", ""),
-        folder=paths.to_folder_rule(folder) if folder else "",  # normalises hand edits like ~/
+        # "" when missing or relative; ~/ is expanded
+        folder=paths.to_folder_rule(folder) if os.path.isabs(paths.expand(folder)) else "",
         ssh_key=values.get("gitshift.sshkey"),
         gh=values.get("gitshift.gh"),
     )
@@ -87,6 +94,6 @@ def list_identities() -> list[Identity]:
         return []
     return [
         load(path.stem)
-        for path in sorted(directory.glob("*.gitconfig"))
-        if NAME_RE.match(path.stem)  # hand-made files git-shift could not have written
+        for path in sorted(directory.glob("*.gitconfig"), key=lambda p: p.stem)
+        if path.is_file() and NAME_RE.fullmatch(path.stem)  # skip files git-shift never writes
     ]

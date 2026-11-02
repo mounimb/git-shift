@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from git_shift import paths, store
@@ -31,9 +33,10 @@ def test_identity_file_is_plain_git_config(home):
 
 
 def test_list_identities_sorted_by_name(home):
+    store.save(make_identity(home, "pro-x"))
     store.save(make_identity(home, "pro"))
     store.save(make_identity(home, "perso"))
-    assert [i.name for i in store.list_identities()] == ["perso", "pro"]
+    assert [i.name for i in store.list_identities()] == ["perso", "pro", "pro-x"]
 
 
 def test_list_identities_empty(home):
@@ -55,16 +58,65 @@ def test_load_rejects_names_that_leave_the_identities_folder(home):
 def test_list_identities_skips_files_with_invalid_names(home):
     store.save(make_identity(home, "perso"))
     (paths.identities_dir() / "My Notes.gitconfig").write_text("", encoding="utf-8")
+    (paths.identities_dir() / "x.gitconfig").mkdir()
     assert [i.name for i in store.list_identities()] == ["perso"]
 
 
-@pytest.mark.parametrize("name", ["", "Perso", "my id", "../x", "-x"])
+@pytest.mark.parametrize("name", ["", "Perso", "my id", "../x", "-x", "perso\n"])
 def test_invalid_names_rejected(name):
     with pytest.raises(GitShiftError, match="invalid identity name"):
         store.validate_name(name)
 
 
-@pytest.mark.parametrize("email", ["", "nope", "a@b", "a b@c.d"])
+@pytest.mark.parametrize(
+    "email", ["", "nope", "a@b", "a b@c.d", "a@b.c\n", "<me@example.com>", '"me@example.com"']
+)
 def test_invalid_emails_rejected(email):
     with pytest.raises(GitShiftError, match="invalid email"):
         store.validate_email(email)
+
+
+@pytest.mark.parametrize("name", ["perso", "work-2", "a_b", "0x"])
+def test_valid_names_accepted(name):
+    store.validate_name(name)
+
+
+@pytest.mark.parametrize("email", ["me@example.com", "first.last+tag@sub.example.co.uk"])
+def test_valid_emails_accepted(email):
+    store.validate_email(email)
+
+
+def test_ssh_command_quotes_paths_with_spaces():
+    assert store.ssh_command("C:/Users/John Doe/.ssh/id") == (
+        "ssh -i 'C:/Users/John Doe/.ssh/id' -o IdentitiesOnly=yes"
+    )
+
+
+def test_save_overwrites_and_drops_removed_keys(home):
+    identity = make_identity(home, ssh_key=paths.to_git_path(home / ".ssh" / "id"))
+    store.save(identity)
+    store.save(dataclasses.replace(identity, ssh_key=None))
+    assert store.load("perso").ssh_key is None
+    assert "sshCommand" not in identity.path.read_text(encoding="utf-8")
+    assert not identity.path.with_name("perso.gitconfig.tmp").exists()
+
+
+def test_save_rejects_invalid_names(home):
+    with pytest.raises(GitShiftError, match="invalid identity name"):
+        store.save(make_identity(home, name="../evil"))
+
+
+def write_identity_file(name, text):
+    paths.identities_dir().mkdir(parents=True, exist_ok=True)
+    (paths.identities_dir() / f"{name}.gitconfig").write_text(text, encoding="utf-8")
+
+
+def test_load_expands_home_in_a_hand_edited_folder(home):
+    write_identity_file("perso", "[gitshift]\n\tfolder = ~/code\n")
+    assert store.load("perso").folder == paths.to_folder_rule(home / "code")
+
+
+@pytest.mark.parametrize("line", ["folder = code", "folder =", "folder"])
+def test_load_treats_a_relative_or_empty_folder_as_missing(home, line):
+    write_identity_file("perso", f"[gitshift]\n\t{line}\n")
+    assert store.load("perso").folder == ""
