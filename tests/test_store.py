@@ -1,4 +1,5 @@
 import dataclasses
+import os
 
 import pytest
 
@@ -69,7 +70,20 @@ def test_invalid_names_rejected(name):
 
 
 @pytest.mark.parametrize(
-    "email", ["", "nope", "a@b", "a b@c.d", "a@b.c\n", "<me@example.com>", '"me@example.com"']
+    "email",
+    [
+        "",
+        "nope",
+        "a@b",
+        "a b@c.d",
+        "a@b.c\n",
+        "<me@example.com>",
+        '"me@example.com"',
+        "'me@example.com'",
+        "me@example.com,",
+        "me@example.com;",
+        ":me@example.com",
+    ],
 )
 def test_invalid_emails_rejected(email):
     with pytest.raises(GitShiftError, match="invalid email"):
@@ -81,7 +95,9 @@ def test_valid_names_accepted(name):
     store.validate_name(name)
 
 
-@pytest.mark.parametrize("email", ["me@example.com", "first.last+tag@sub.example.co.uk"])
+@pytest.mark.parametrize(
+    "email", ["me@example.com", "first.last+tag@sub.example.co.uk", "o'brien@example.com"]
+)
 def test_valid_emails_accepted(email):
     store.validate_email(email)
 
@@ -119,4 +135,10 @@ def test_load_expands_home_in_a_hand_edited_folder(home):
 @pytest.mark.parametrize("line", ["folder = code", "folder =", "folder"])
 def test_load_treats_a_relative_or_empty_folder_as_missing(home, line):
     write_identity_file("perso", f"[gitshift]\n\t{line}\n")
+    assert store.load("perso").folder == ""
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive-relative paths exist only on Windows")
+def test_load_treats_a_folder_without_a_drive_as_missing(home):
+    write_identity_file("perso", "[gitshift]\n\tfolder = /c/Users/me/code\n")
     assert store.load("perso").folder == ""

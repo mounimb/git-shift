@@ -12,7 +12,8 @@ from . import gitconfig, paths
 from .errors import GitShiftError
 
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")  # used with fullmatch
-EMAIL_RE = re.compile(r'[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+')  # git strips <>" from idents
+GIT_IDENT_CRUD = ",:;<>\"'\\"  # git strips these from both ends of a name or email
+EMAIL_RE = re.compile(r'[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+')  # git deletes < and > anywhere
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ def validate_name(name: str) -> None:
 
 
 def validate_email(email: str) -> None:
-    if not EMAIL_RE.fullmatch(email):
+    if not EMAIL_RE.fullmatch(email) or email.strip(GIT_IDENT_CRUD) != email:
         raise GitShiftError(f'invalid email "{email}"')
 
 
@@ -70,6 +71,12 @@ def save(identity: Identity) -> None:
     os.replace(tmp, path)
 
 
+def _is_absolute(path: str) -> bool:
+    """os.path.isabs, but on Windows a path also needs a drive or a UNC share: "/x" is
+    relative to the current drive (Python before 3.13 called it absolute)."""
+    return os.path.isabs(path) and (os.name != "nt" or bool(os.path.splitdrive(path)[0]))
+
+
 def load(name: str) -> Identity:
     validate_name(name)  # names become paths: "../../../" would point at ~/.gitconfig
     path = identity_path(name)
@@ -82,7 +89,7 @@ def load(name: str) -> Identity:
         email=values.get("user.email", ""),
         user_name=values.get("user.name", ""),
         # "" when missing or relative; ~/ is expanded
-        folder=paths.to_folder_rule(folder) if os.path.isabs(paths.expand(folder)) else "",
+        folder=paths.to_folder_rule(folder) if _is_absolute(paths.expand(folder)) else "",
         ssh_key=values.get("gitshift.sshkey"),
         gh=values.get("gitshift.gh"),
     )
