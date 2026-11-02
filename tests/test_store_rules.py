@@ -40,7 +40,7 @@ def test_deeper_folder_wins(home, make_repo):
     assert git(make_repo(home / "code" / "pro" / "app"), "config", "user.email") == (
         "pro@example.com"
     )
-    assert git(make_repo(home / "code" / "side"), "config", "user.email") == ("perso@example.com")
+    assert git(make_repo(home / "code" / "side"), "config", "user.email") == "perso@example.com"
 
 
 def test_global_include_added_only_once(home):
@@ -69,12 +69,14 @@ def test_global_config_backed_up_before_first_change(home):
     backups = list(paths.backups_dir().iterdir())
     assert len(backups) == 1
     assert "Original" in backups[0].read_text(encoding="utf-8")
+    assert "rules.gitconfig" not in backups[0].read_text(encoding="utf-8")
 
 
 def test_remove_deletes_identity_and_rule(home, make_repo):
     add(home, folder="code")
     store.remove_identity("perso")
     assert store.list_identities() == []
+    assert "gitdir" not in paths.rules_file().read_text(encoding="utf-8")
     assert gitconfig.get("user.email", cwd=make_repo(home / "code" / "app")) is None
 
 
@@ -104,7 +106,7 @@ def test_add_warns_when_global_user_comes_after_the_include(home):
         encoding="utf-8",
     )
     _, warnings = add(home)
-    assert any("overrides every identity" in w for w in warnings)
+    assert any("can override your identities" in w for w in warnings)
 
 
 def test_identity_without_folder_applies_to_no_repo(home, make_repo):
@@ -114,3 +116,77 @@ def test_identity_without_folder_applies_to_no_repo(home, make_repo):
     )
     store.write_rules(store.list_identities())
     assert gitconfig.get("user.email", cwd=make_repo(home / "elsewhere" / "app")) is None
+
+
+def test_failed_global_include_leaves_nothing_behind(home):
+    (home / ".gitconfig").write_text("[user]\n\tname = Original\n", encoding="utf-8")
+    (home / ".gitconfig.lock").write_text("", encoding="utf-8")  # git cannot lock the file
+    with pytest.raises(GitShiftError):
+        add(home)
+    assert store.list_identities() == []
+    (home / ".gitconfig.lock").unlink()
+    add(home)
+    assert [i.name for i in store.list_identities()] == ["perso"]
+
+
+def test_failed_rules_write_removes_the_new_identity(home, monkeypatch):
+    def broken(identities):
+        raise GitShiftError("rules write failed")
+
+    monkeypatch.setattr(store, "write_rules", broken)
+    with pytest.raises(GitShiftError, match="rules write failed"):
+        add(home)
+    assert not store.identity_path("perso").exists()
+
+
+def test_nested_identity_without_ssh_key_warns_about_the_inherited_key(home):
+    add(home, "perso", "code", ssh_key=str(home / ".ssh" / "id_perso"))
+    _, warnings = add(home, "pro", "code/pro")
+    assert any('"pro"' in w and "id_perso" in w for w in warnings)
+
+
+def test_outer_identity_added_after_the_inner_one_warns_too(home):
+    add(home, "pro", "code/pro")
+    _, warnings = add(home, "perso", "code", ssh_key=str(home / ".ssh" / "id_perso"))
+    assert any('"pro"' in w and "id_perso" in w for w in warnings)
+
+
+def test_add_warns_about_a_user_include_if_after_the_git_shift_include(home):
+    (home / ".gitconfig.work").write_text("[user]\n\temail = old@example.com\n", encoding="utf-8")
+    (home / ".gitconfig").write_text(
+        "[include]\n\tpath = ~/.gitconfig.local\n"
+        '[includeIf "gitdir/i:~/work/"]\n\tpath = .gitconfig.work\n',
+        encoding="utf-8",
+    )
+    _, warnings = add(home)
+    assert any("user.email" in w and "can override" in w for w in warnings)
+
+
+def test_relative_include_of_the_rules_file_is_recognised(home, monkeypatch):
+    (home / ".gitconfig").write_text(
+        "[include]\n\tpath = .config/git-shift/rules.gitconfig\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(home.parent)  # git resolves it against ~/.gitconfig, not the cwd
+    add(home)
+    assert len(gitconfig.get_all("include.path", scope="global")) == 1
+
+
+def test_include_goes_to_git_config_global_when_set(home, monkeypatch):
+    target = home / "custom.gitconfig"
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(target))
+    add(home)
+    assert paths.to_git_path(paths.rules_file()) in target.read_text(encoding="utf-8")
+    assert not (home / ".gitconfig").exists()
+
+
+def test_empty_folder_rejected(home):
+    with pytest.raises(GitShiftError, match="folder cannot be empty"):
+        store.add_identity("perso", email="p@example.com", user_name="P", folder=" ")
+
+
+def test_stray_file_in_backups_does_not_skip_the_backup(home):
+    (home / ".gitconfig").write_text("[user]\n\tname = Original\n", encoding="utf-8")
+    paths.backups_dir().mkdir(parents=True)
+    (paths.backups_dir() / ".DS_Store").write_text("", encoding="utf-8")
+    add(home)
+    assert len(list(paths.backups_dir().glob("gitconfig-*"))) == 1

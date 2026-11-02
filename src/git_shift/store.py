@@ -54,6 +54,18 @@ def ssh_command(key_path: str) -> str:
     return f"ssh -i {shlex.quote(key_path)} -o IdentitiesOnly=yes"
 
 
+def _replace(src: Path, dst: Path) -> None:
+    """os.replace, retried briefly on Windows, where a git process reading dst blocks it."""
+    for attempt in range(20):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 19:
+                raise
+            time.sleep(0.05)
+
+
 def save(identity: Identity) -> None:
     """Write the identity file in one step, so a failure never leaves a partial file."""
     validate_name(identity.name)
@@ -70,7 +82,7 @@ def save(identity: Identity) -> None:
         entries.append(("gitshift.gh", identity.gh))
     for key, value in entries:
         gitconfig.set_value(key, value, file=tmp)
-    os.replace(tmp, path)
+    _replace(tmp, path)
 
 
 def _is_absolute(path: str) -> bool:
@@ -113,7 +125,7 @@ def write_rules(identities: list[Identity]) -> None:
     rules = paths.rules_file()
     rules.parent.mkdir(parents=True, exist_ok=True)
     tmp = rules.with_name(rules.name + ".tmp")
-    tmp.write_text("# Managed by git-shift. Do not edit by hand.\n", encoding="utf-8")
+    tmp.write_text("# Managed by git-shift. Do not edit by hand.\n", encoding="utf-8", newline="\n")
     usable = [i for i in identities if i.folder]  # an empty gitdir pattern matches every repo
     for identity in sorted(usable, key=lambda i: (paths.depth(i.folder), i.name)):
         gitconfig.set_value(
@@ -121,7 +133,7 @@ def write_rules(identities: list[Identity]) -> None:
             paths.to_git_path(identity.path),
             file=tmp,
         )
-    os.replace(tmp, rules)
+    _replace(tmp, rules)
 
 
 def global_config_file() -> Path | None:
@@ -135,7 +147,7 @@ def backup_global_config() -> Path | None:
     """Copy the global config once, before git-shift changes it for the first time."""
     source = global_config_file()
     backups = paths.backups_dir()
-    if source is None or (backups.is_dir() and any(backups.iterdir())):
+    if source is None or any(backups.glob("gitconfig-*")):
         return None
     backups.mkdir(parents=True, exist_ok=True)
     target = backups / f"gitconfig-{time.strftime('%Y%m%d-%H%M%S')}"
@@ -143,10 +155,20 @@ def backup_global_config() -> Path | None:
     return target
 
 
+def _include_target(value: str) -> str:
+    """Absolute path of a global include.path value, resolved as git does: a relative path
+    is relative to the config file that contains it."""
+    value = paths.expand(value)
+    base = global_config_file()
+    if not _is_absolute(value) and base is not None:
+        value = os.path.join(base.parent, value)
+    return paths.to_git_path(value)
+
+
 def ensure_global_include() -> None:
     target = paths.to_git_path(paths.rules_file())
     current = gitconfig.get_all("include.path", scope="global")
-    if target.casefold() in (paths.to_git_path(value).casefold() for value in current):
+    if target.casefold() in (_include_target(value).casefold() for value in current):
         return
     backup_global_config()
     gitconfig.add_value("include.path", target, scope="global")
@@ -156,18 +178,47 @@ IDENTITY_KEYS = ("user.name", "user.email", "core.sshcommand")
 
 
 def keys_after_global_include() -> list[str] | None:
-    """Identity keys the global config sets after the git-shift include (they override
-    every identity), or None when the include is missing. Includes are not followed."""
+    """Identity keys the global config sets after the git-shift include, directly or in a
+    file it includes there (one level deep), or None when the include is missing. Those
+    keys can override identities. Includes before git-shift's are not followed."""
     rules = paths.to_git_path(paths.rules_file()).casefold()
     entries = gitconfig.list_entries(scope="global")
     positions = [
         index
         for index, (key, value) in enumerate(entries)
-        if key == "include.path" and paths.to_git_path(value).casefold() == rules
+        if key == "include.path" and _include_target(value).casefold() == rules
     ]
     if not positions:
         return None
-    return sorted({key for key, _ in entries[positions[-1] + 1 :] if key in IDENTITY_KEYS})
+    late = set()
+    for key, value in entries[positions[-1] + 1 :]:
+        if key in IDENTITY_KEYS:
+            late.add(key)
+        elif key == "include.path" or (key.startswith("includeif.") and key.endswith(".path")):
+            included = gitconfig.list_entries(file=_include_target(value))
+            late.update(k for k, _ in included if k in IDENTITY_KEYS)
+    return sorted(late)
+
+
+def _inherited_ssh_key_warnings(new: Identity, existing: list[Identity]) -> list[str]:
+    """git applies every matching rule, so an identity nested in another one's folder keeps
+    the outer core.sshCommand unless it sets its own SSH key."""
+    warnings = []
+    for other in existing:
+        if not other.folder:
+            continue
+        if paths.is_within(new.folder, other.folder):
+            outer, inner = other, new
+        elif paths.is_within(other.folder, new.folder):
+            outer, inner = new, other
+        else:
+            continue
+        if outer.ssh_key and not inner.ssh_key:
+            warnings.append(
+                f'"{inner.name}" is inside the folder of "{outer.name}" and has no SSH key, '
+                f"so git uses {outer.ssh_key} there"
+            )
+    return warnings
 
 
 def add_identity(
@@ -183,6 +234,8 @@ def add_identity(
     validate_email(email)
     if not user_name.strip():
         raise GitShiftError("author name cannot be empty")  # git refuses empty idents
+    if not folder.strip():
+        raise GitShiftError("folder cannot be empty")  # "" would mean the current folder
     if identity_path(name).exists():
         raise GitShiftError(f'identity "{name}" already exists')
     folder_rule = paths.to_folder_rule(folder)
@@ -199,14 +252,19 @@ def add_identity(
         warnings.append(f"SSH key {key} not found")
 
     identity = Identity(name, email, user_name, folder_rule, key, gh)
+    warnings.extend(_inherited_ssh_key_warnings(identity, existing))
+    ensure_global_include()  # first: idempotent, and git ignores an include of a missing file
     save(identity)
-    write_rules([*existing, identity])
-    ensure_global_include()
+    try:
+        write_rules([*existing, identity])
+    except BaseException:
+        identity.path.unlink(missing_ok=True)  # the previous rules file is still in place
+        raise
     late = keys_after_global_include()
     if late:
         warnings.append(
             f"your global config sets {', '.join(late)} after the git-shift include, "
-            "so it overrides every identity: run git shift doctor"
+            "so it can override your identities: run git shift doctor"
         )
     return identity, warnings
 
