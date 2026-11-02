@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,3 +106,113 @@ def list_identities() -> list[Identity]:
         for path in sorted(directory.glob("*.gitconfig"), key=lambda p: p.stem)
         if path.is_file() and NAME_RE.fullmatch(path.stem)  # skip files git-shift never writes
     ]
+
+
+def write_rules(identities: list[Identity]) -> None:
+    """Regenerate rules.gitconfig. Deeper folders come last so they win."""
+    rules = paths.rules_file()
+    rules.parent.mkdir(parents=True, exist_ok=True)
+    tmp = rules.with_name(rules.name + ".tmp")
+    tmp.write_text("# Managed by git-shift. Do not edit by hand.\n", encoding="utf-8")
+    usable = [i for i in identities if i.folder]  # an empty gitdir pattern matches every repo
+    for identity in sorted(usable, key=lambda i: (paths.depth(i.folder), i.name)):
+        gitconfig.set_value(
+            f"includeIf.gitdir/i:{paths.gitdir_pattern(identity.folder)}.path",
+            paths.to_git_path(identity.path),
+            file=tmp,
+        )
+    os.replace(tmp, rules)
+
+
+def global_config_file() -> Path | None:
+    for candidate in paths.global_config_files():
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def backup_global_config() -> Path | None:
+    """Copy the global config once, before git-shift changes it for the first time."""
+    source = global_config_file()
+    backups = paths.backups_dir()
+    if source is None or (backups.is_dir() and any(backups.iterdir())):
+        return None
+    backups.mkdir(parents=True, exist_ok=True)
+    target = backups / f"gitconfig-{time.strftime('%Y%m%d-%H%M%S')}"
+    shutil.copy2(source, target)
+    return target
+
+
+def ensure_global_include() -> None:
+    target = paths.to_git_path(paths.rules_file())
+    current = gitconfig.get_all("include.path", scope="global")
+    if target.casefold() in (paths.to_git_path(value).casefold() for value in current):
+        return
+    backup_global_config()
+    gitconfig.add_value("include.path", target, scope="global")
+
+
+IDENTITY_KEYS = ("user.name", "user.email", "core.sshcommand")
+
+
+def keys_after_global_include() -> list[str] | None:
+    """Identity keys the global config sets after the git-shift include (they override
+    every identity), or None when the include is missing. Includes are not followed."""
+    rules = paths.to_git_path(paths.rules_file()).casefold()
+    entries = gitconfig.list_entries(scope="global")
+    positions = [
+        index
+        for index, (key, value) in enumerate(entries)
+        if key == "include.path" and paths.to_git_path(value).casefold() == rules
+    ]
+    if not positions:
+        return None
+    return sorted({key for key, _ in entries[positions[-1] + 1 :] if key in IDENTITY_KEYS})
+
+
+def add_identity(
+    name: str,
+    *,
+    email: str,
+    user_name: str,
+    folder: str,
+    ssh_key: str | None = None,
+    gh: str | None = None,
+) -> tuple[Identity, list[str]]:
+    validate_name(name)
+    validate_email(email)
+    if not user_name.strip():
+        raise GitShiftError("author name cannot be empty")  # git refuses empty idents
+    if identity_path(name).exists():
+        raise GitShiftError(f'identity "{name}" already exists')
+    folder_rule = paths.to_folder_rule(folder)
+    existing = list_identities()
+    for other in existing:
+        if other.folder.casefold() == folder_rule.casefold():
+            raise GitShiftError(f'folder {folder_rule} is already used by "{other.name}"')
+
+    warnings = []
+    if not Path(folder_rule).is_dir():
+        warnings.append(f"folder {folder_rule} does not exist yet")
+    key = paths.to_git_path(ssh_key) if ssh_key else None
+    if key and not Path(key).is_file():
+        warnings.append(f"SSH key {key} not found")
+
+    identity = Identity(name, email, user_name, folder_rule, key, gh)
+    save(identity)
+    write_rules([*existing, identity])
+    ensure_global_include()
+    late = keys_after_global_include()
+    if late:
+        warnings.append(
+            f"your global config sets {', '.join(late)} after the git-shift include, "
+            "so it overrides every identity: run git shift doctor"
+        )
+    return identity, warnings
+
+
+def remove_identity(name: str) -> Identity:
+    identity = load(name)
+    identity.path.unlink()
+    write_rules(list_identities())
+    return identity
