@@ -63,7 +63,7 @@ def test_list_identities_skips_files_with_invalid_names(home):
     assert [i.name for i in store.list_identities()] == ["perso"]
 
 
-@pytest.mark.parametrize("name", ["", "Perso", "my id", "../x", "-x", "perso\n"])
+@pytest.mark.parametrize("name", ["", "Perso", "my id", "../x", "-x", "perso\n", "con", "com1"])
 def test_invalid_names_rejected(name):
     with pytest.raises(GitShiftError, match="invalid identity name"):
         store.validate_name(name)
@@ -115,6 +115,11 @@ def test_save_overwrites_and_drops_removed_keys(home):
     assert store.load("perso").ssh_key is None
     assert "sshCommand" not in identity.path.read_text(encoding="utf-8")
     assert not identity.path.with_name("perso.gitconfig.tmp").exists()
+
+
+def test_save_leaves_no_temp_file(home):
+    store.save(make_identity(home))
+    assert [p.name for p in paths.identities_dir().iterdir()] == ["perso.gitconfig"]
 
 
 def test_save_rejects_invalid_names(home):

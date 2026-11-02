@@ -43,8 +43,8 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
-    identity = store.remove_identity(args.name)
-    print(f'{OK} identity "{identity.name}" removed')
+    store.remove_identity(args.name)
+    print(f'{OK} identity "{args.name}" removed')
     return 0
 
 

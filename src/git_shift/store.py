@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,10 @@ from .errors import GitShiftError
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")  # used with fullmatch
 GIT_IDENT_CRUD = ",:;<>\"'\\"  # git strips these from both ends of a name or email
 EMAIL_RE = re.compile(r'[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+')  # git deletes < and > anywhere
+WINDOWS_RESERVED_RE = re.compile(r"con|prn|aux|nul|com[0-9]|lpt[0-9]")  # used with fullmatch
+GH_LOGIN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")  # used with fullmatch
+IDENTITY_KEYS = ("user.name", "user.email", "core.sshcommand")
+AUTHOR_OVERRIDE_KEYS = ("author.name", "author.email", "committer.name", "committer.email")
 
 
 @dataclass(frozen=True)
@@ -36,12 +41,18 @@ def identity_path(name: str) -> Path:
     return paths.identities_dir() / f"{name}.gitconfig"
 
 
+def _valid_name(name: str) -> bool:
+    return bool(NAME_RE.fullmatch(name)) and not WINDOWS_RESERVED_RE.fullmatch(name)
+
+
 def validate_name(name: str) -> None:
     if not NAME_RE.fullmatch(name):
         raise GitShiftError(
             f'invalid identity name "{name}": use lowercase letters, digits, "-" and "_", '
             "starting with a letter or digit"
         )
+    if WINDOWS_RESERVED_RE.fullmatch(name):
+        raise GitShiftError(f'invalid identity name "{name}": the name is reserved by Windows')
 
 
 def validate_email(email: str) -> None:
@@ -66,12 +77,19 @@ def _replace(src: Path, dst: Path) -> None:
             time.sleep(0.05)
 
 
+def _temp_beside(path: Path) -> Path:
+    """A new empty file next to path, unique to this run, so concurrent runs never share it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)
+    return Path(name)
+
+
 def save(identity: Identity) -> None:
     """Write the identity file in one step, so a failure never leaves a partial file."""
     validate_name(identity.name)
     path = identity.path
-    tmp = path.with_name(path.name + ".tmp")  # not matched by *.gitconfig
-    tmp.unlink(missing_ok=True)
+    tmp = _temp_beside(path)
     entries = [("user.name", identity.user_name), ("user.email", identity.email)]
     if identity.ssh_key:
         entries.append(("core.sshCommand", ssh_command(identity.ssh_key)))
@@ -80,9 +98,13 @@ def save(identity: Identity) -> None:
         entries.append(("gitshift.sshKey", identity.ssh_key))
     if identity.gh:
         entries.append(("gitshift.gh", identity.gh))
-    for key, value in entries:
-        gitconfig.set_value(key, value, file=tmp)
-    _replace(tmp, path)
+    try:
+        for key, value in entries:
+            gitconfig.set_value(key, value, file=tmp)
+        _replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _is_absolute(path: str) -> bool:
@@ -109,31 +131,41 @@ def load(name: str) -> Identity:
     )
 
 
-def list_identities() -> list[Identity]:
+def _identity_names() -> list[str]:
+    """Names of the identity files git-shift could have written, sorted."""
     directory = paths.identities_dir()
     if not directory.is_dir():
         return []
-    return [
-        load(path.stem)
-        for path in sorted(directory.glob("*.gitconfig"), key=lambda p: p.stem)
-        if path.is_file() and NAME_RE.fullmatch(path.stem)  # skip files git-shift never writes
-    ]
+    return sorted(
+        path.stem
+        for path in directory.glob("*.gitconfig")
+        if path.is_file() and _valid_name(path.stem)
+    )
+
+
+def list_identities() -> list[Identity]:
+    return [load(name) for name in _identity_names()]
 
 
 def write_rules(identities: list[Identity]) -> None:
     """Regenerate rules.gitconfig. Deeper folders come last so they win."""
     rules = paths.rules_file()
-    rules.parent.mkdir(parents=True, exist_ok=True)
-    tmp = rules.with_name(rules.name + ".tmp")
-    tmp.write_text("# Managed by git-shift. Do not edit by hand.\n", encoding="utf-8", newline="\n")
-    usable = [i for i in identities if i.folder]  # an empty gitdir pattern matches every repo
-    for identity in sorted(usable, key=lambda i: (paths.depth(i.folder), i.name)):
-        gitconfig.set_value(
-            f"includeIf.gitdir/i:{paths.gitdir_pattern(identity.folder)}.path",
-            paths.to_git_path(identity.path),
-            file=tmp,
+    tmp = _temp_beside(rules)
+    try:
+        tmp.write_text(
+            "# Managed by git-shift. Do not edit by hand.\n", encoding="utf-8", newline="\n"
         )
-    _replace(tmp, rules)
+        usable = [i for i in identities if i.folder]  # an empty gitdir pattern matches every repo
+        for identity in sorted(usable, key=lambda i: (paths.depth(i.folder), i.name)):
+            gitconfig.set_value(
+                f"includeIf.gitdir/i:{paths.gitdir_pattern(identity.folder)}.path",
+                paths.to_git_path(identity.path),
+                file=tmp,
+            )
+        _replace(tmp, rules)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def global_config_file() -> Path | None:
@@ -151,7 +183,9 @@ def backup_global_config() -> Path | None:
         return None
     backups.mkdir(parents=True, exist_ok=True)
     target = backups / f"gitconfig-{time.strftime('%Y%m%d-%H%M%S')}"
-    shutil.copy2(source, target)
+    tmp = _temp_beside(target)
+    shutil.copy2(source, tmp)
+    _replace(tmp, target)
     return target
 
 
@@ -174,9 +208,6 @@ def ensure_global_include() -> None:
     gitconfig.add_value("include.path", target, scope="global")
 
 
-IDENTITY_KEYS = ("user.name", "user.email", "core.sshcommand")
-
-
 def keys_after_global_include() -> list[str] | None:
     """Identity keys the global config sets after the git-shift include, directly or in a
     file it includes there (one level deep), or None when the include is missing. Those
@@ -197,10 +228,17 @@ def keys_after_global_include() -> list[str] | None:
         elif key == "include.path" or (key.startswith("includeif.") and key.endswith(".path")):
             try:
                 included = gitconfig.list_entries(file=_include_target(value))
-            except GitShiftError:
+            except (GitShiftError, OSError):
                 continue  # unreadable or malformed: git reports it itself when the include applies
             late.update(k for k, _ in included if k in IDENTITY_KEYS)
     return sorted(late)
+
+
+def global_author_overrides() -> list[str]:
+    """author.* / committer.* keys in the global config: git uses them instead of user.* in
+    every repository, whatever the identity."""
+    entries = gitconfig.list_entries(scope="global")
+    return sorted({key for key, _ in entries if key in AUTHOR_OVERRIDE_KEYS})
 
 
 def _inherited_ssh_key_warnings(new: Identity, existing: list[Identity]) -> list[str]:
@@ -242,6 +280,10 @@ def add_identity(
         raise GitShiftError("author name cannot be empty")  # git refuses empty idents
     if not folder.strip():
         raise GitShiftError("folder cannot be empty")  # "" would mean the current folder
+    if gh is not None:
+        gh = gh.removeprefix("@")
+        if not GH_LOGIN_RE.fullmatch(gh):
+            raise GitShiftError(f'invalid GitHub login "{gh}"')
     if identity_path(name).exists():
         raise GitShiftError(f'identity "{name}" already exists')
     folder_rule = paths.to_folder_rule(folder)
@@ -262,7 +304,7 @@ def add_identity(
     ensure_global_include()  # first: idempotent, and git ignores an include of a missing file
     save(identity)
     try:
-        write_rules([*existing, identity])
+        write_rules(list_identities())
     except BaseException:
         identity.path.unlink(missing_ok=True)  # the previous rules file is still in place
         raise
@@ -272,12 +314,20 @@ def add_identity(
             f"your global config sets {', '.join(late)} after the git-shift include, "
             "so it can override your identities: run git shift doctor"
         )
+    overrides = global_author_overrides()
+    if overrides:
+        warnings.append(
+            f"your global config sets {', '.join(overrides)}, which git uses instead of "
+            "the identity's name and email in every repository"
+        )
     return identity, warnings
 
 
-def remove_identity(name: str) -> Identity:
-    identity = load(name)
-    remaining = [i for i in list_identities() if i.name != name]  # fails before any change
-    identity.path.unlink()
+def remove_identity(name: str) -> None:
+    validate_name(name)
+    path = identity_path(name)
+    if not path.is_file():
+        raise GitShiftError(f'no identity named "{name}"')
+    remaining = [load(other) for other in _identity_names() if other != name]  # before changes
+    path.unlink()
     write_rules(remaining)
-    return identity

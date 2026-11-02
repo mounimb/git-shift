@@ -217,3 +217,50 @@ def test_stray_file_in_backups_does_not_skip_the_backup(home):
     (paths.backups_dir() / ".DS_Store").write_text("", encoding="utf-8")
     add(home)
     assert len(list(paths.backups_dir().glob("gitconfig-*"))) == 1
+
+
+def test_remove_works_on_a_hand_broken_identity(home):
+    add(home, folder="code")
+    store.identity_path("perso").write_text("[user\n", encoding="utf-8")
+    store.remove_identity("perso")
+    assert not store.identity_path("perso").exists()
+    assert "gitdir" not in paths.rules_file().read_text(encoding="utf-8")
+
+
+def test_add_warns_about_a_global_author_email(home):
+    (home / ".gitconfig").write_text("[author]\n\temail = author@example.com\n", encoding="utf-8")
+    _, warnings = add(home)
+    assert any("author.email" in w for w in warnings)
+
+
+def test_default_layout_gives_no_override_warning(home):
+    (home / ".gitconfig").write_text("[user]\n\temail = global@example.com\n", encoding="utf-8")
+    _, warnings = add(home)
+    assert not any("override" in w or "instead of" in w for w in warnings)
+
+
+def test_inherited_ssh_key_warning_matches_git(home, make_repo):
+    add(home, "perso", "code", ssh_key=str(home / ".ssh" / "id_perso"))
+    add(home, "pro", "code/pro")
+    inner = make_repo(home / "code" / "pro" / "app")
+    assert "id_perso" in git(inner, "config", "core.sshCommand")
+
+
+def test_include_goes_to_the_xdg_config_when_it_is_the_only_one(home):
+    xdg = home / ".config" / "git" / "config"
+    xdg.parent.mkdir(parents=True)
+    xdg.write_text("[user]\n\tname = Original\n", encoding="utf-8")
+    add(home)
+    assert "rules.gitconfig" in xdg.read_text(encoding="utf-8")
+    assert not (home / ".gitconfig").exists()
+
+
+@pytest.mark.parametrize("login", ["-x", "https://github.com/x", "a b"])
+def test_invalid_github_login_rejected(home, login):
+    with pytest.raises(GitShiftError, match="invalid GitHub login"):
+        add(home, gh=login)
+
+
+def test_github_login_loses_a_leading_at(home):
+    identity, _ = add(home, gh="@mounimb")
+    assert identity.gh == "mounimb"
