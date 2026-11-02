@@ -277,6 +277,7 @@ def add_identity(
 
 def remove_identity(name: str) -> Identity:
     identity = load(name)
+    remaining = [i for i in list_identities() if i.name != name]  # fails before any change
     identity.path.unlink()
-    write_rules(list_identities())
+    write_rules(remaining)
     return identity

@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 
@@ -69,3 +70,62 @@ def test_list_flags_an_identity_without_a_usable_folder(home, capsys):
     )
     assert main(["list"]) == 0
     assert "(no usable folder)" in capsys.readouterr().out
+
+
+def test_piped_output_is_utf8(home):
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}  # what Windows uses for pipes and mintty
+    args = ["add", "perso", "--email", "me@example.com", "--name", "Me"]
+    args += ["--folder", str(home / "Łukasz")]
+    proc = subprocess.run([sys.executable, "-m", "git_shift", *args], capture_output=True, env=env)
+    out = proc.stdout.decode("utf-8")
+    assert out.startswith("✓ ") and "Łukasz" in out
+
+
+def test_add_passes_every_option_and_prints_warnings(home, capsys):
+    code = main(
+        [
+            "add", "perso",
+            "--email", "me@example.com",
+            "--name", "Jane Doe",
+            "--folder", str(home / "code"),
+            "--ssh-key", str(home / ".ssh" / "id_perso"),
+            "--gh", "mounimb",
+        ]
+    )  # fmt: skip
+    assert code == 0
+    identity = store.load("perso")
+    assert identity.user_name == "Jane Doe" and identity.gh == "mounimb"
+    assert identity.ssh_key == paths.to_git_path(home / ".ssh" / "id_perso")
+    out = capsys.readouterr().out
+    assert "does not exist yet" in out and "not found" in out
+
+
+def test_remove_unknown_identity_exits_2(home, capsys):
+    assert main(["remove", "nosuch"]) == 2
+    assert 'no identity named "nosuch"' in capsys.readouterr().err
+
+
+def test_unexpected_error_exits_1_and_debug_raises_it(home, monkeypatch, capsys):
+    def boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(store, "list_identities", boom)
+    assert main(["list"]) == 1
+    err = capsys.readouterr().err
+    assert "RuntimeError: boom" in err and "git shift --debug" in err
+    with pytest.raises(RuntimeError):
+        main(["--debug", "list"])
+
+
+def test_ctrl_c_exits_130(home, monkeypatch):
+    def interrupted():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(store, "list_identities", interrupted)
+    assert main(["list"]) == 130
+
+
+def test_missing_identity_name_is_called_identity(home, capsys):
+    with pytest.raises(SystemExit):
+        main(["add", "--email", "a@example.com", "--name", "perso", "--folder", str(home)])
+    assert "IDENTITY" in capsys.readouterr().err

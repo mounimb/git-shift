@@ -87,6 +87,14 @@ def test_remove_never_leaves_the_identities_folder(home):
     assert (home / ".gitconfig").is_file()
 
 
+def test_remove_with_a_malformed_sibling_changes_nothing(home):
+    add(home, folder="code")
+    (paths.identities_dir() / "bad.gitconfig").write_text("[user\n", encoding="utf-8")
+    with pytest.raises(GitShiftError):
+        store.remove_identity("perso")
+    assert store.identity_path("perso").is_file()
+
+
 def test_empty_author_name_rejected(home):
     with pytest.raises(GitShiftError, match="author name cannot be empty"):
         store.add_identity("perso", email="p@example.com", user_name=" ", folder=str(home))

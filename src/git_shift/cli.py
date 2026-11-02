@@ -32,7 +32,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     identities = store.list_identities()
     if not identities:
         print("no identities yet. Create one with:")
-        print("  git shift add <name> --email <email> --name <name> --folder <dir>")
+        print('  git shift add <identity> --email <email> --name "<your name>" --folder <dir>')
         return 0
     width = max(len(identity.name) for identity in identities)
     for identity in identities:
@@ -65,9 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
     add = sub.add_parser("add", help="create an identity bound to a folder")
-    add.add_argument("name", help="identity name, e.g. perso")
+    add.add_argument("name", metavar="IDENTITY", help="identity name, e.g. perso")
     add.add_argument("--email", required=True, help="commit email")
-    add.add_argument("--name", dest="user_name", required=True, metavar="NAME", help="author name")
+    add.add_argument(
+        "--name", dest="user_name", required=True, metavar="AUTHOR", help="author name"
+    )
     add.add_argument("--folder", required=True, help="repos under this folder use the identity")
     add.add_argument("--ssh-key", help="private key used for git over SSH")
     add.add_argument("--gh", metavar="LOGIN", help="GitHub login expected for this identity")
@@ -75,16 +77,21 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("list", help="list identities")
 
     remove = sub.add_parser("remove", help="delete an identity")
-    remove.add_argument("name")
+    remove.add_argument("name", metavar="IDENTITY")
     return parser
 
 
 def _configure_output() -> None:
-    """Never crash on a console that cannot print symbols like ✓."""
+    """Write UTF-8 like git when output is piped or goes to mintty (Windows would use cp1252),
+    and never crash on a character the stream cannot encode."""
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is not None:
+        if reconfigure is None:
+            continue
+        if stream.isatty():
             reconfigure(errors="replace")
+        else:
+            reconfigure(encoding="utf-8", errors="replace", newline="\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,8 +103,14 @@ def main(argv: list[str] | None = None) -> int:
     except GitShiftError as exc:
         print(f"git-shift: error: {exc}", file=sys.stderr)
         return exc.exit_code
+    except KeyboardInterrupt:
+        return 130
     except Exception as exc:
         if args.debug:
             raise
-        print(f"git-shift: unexpected error: {exc} (rerun with --debug)", file=sys.stderr)
+        print(
+            f"git-shift: unexpected error: {type(exc).__name__}: {exc} "
+            "(rerun as: git shift --debug <command> ...)",
+            file=sys.stderr,
+        )
         return 1
