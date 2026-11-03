@@ -1,16 +1,27 @@
 import os
+import re
 
 import pytest
 from helpers import git
 
-from git_shift import resolve, store
+from git_shift import paths, resolve, store
 
 
-def add(home, name="perso", folder="code", gh=None):
+def add(home, name="perso", folder="code", gh=None, ssh_key=None):
     identity, _ = store.add_identity(
-        name, email=f"{name}@example.com", user_name=name.title(), folder=str(home / folder), gh=gh
+        name,
+        email=f"{name}@example.com",
+        user_name=name.title(),
+        folder=str(home / folder),
+        gh=gh,
+        ssh_key=ssh_key,
     )
     return identity
+
+
+def recorded_email(repo, env=None):
+    """The email git puts in a commit made in repo."""
+    return re.search(r"<(.*)>", git(repo, "var", "GIT_AUTHOR_IDENT", env=env)).group(1)
 
 
 def test_expected_identity_picks_deepest_folder(home):
@@ -22,12 +33,32 @@ def test_expected_identity_picks_deepest_folder(home):
     assert resolve.expected_identity(home / "elsewhere", identities) is None
 
 
+def test_expected_identity_breaks_ties_like_git(home, make_repo):
+    # after a hand edit two identities can share a folder (here up to case). git applies
+    # the rules in write_rules order, (depth, name), so the last name wins.
+    add(home, "perso", "code")
+    pro = add(home, "pro", "work")
+    git(home, "config", "--file", str(pro.path), "gitshift.folder", str(home / "CODE"))
+    store.write_rules(store.list_identities())
+    repo = make_repo(home / "code" / "app")
+    assert git(repo, "config", "user.email") == "pro@example.com"
+    assert resolve.expected_identity(repo, store.list_identities()).name == "pro"
+
+
 def test_remote_identity_matches_github_owner(home):
     add(home, gh="mounimb")
     identities = store.list_identities()
     assert resolve.remote_identity("git@github.com:MounimB/x.git", identities).name == "perso"
     assert resolve.remote_identity("https://gitlab.com/mounimb/x", identities) is None
     assert resolve.remote_identity("https://github.com/someone/x", identities) is None
+
+
+def test_remote_identity_knows_other_github_hosts(home):
+    add(home, gh="mounimb")
+    identities = store.list_identities()
+    over_443 = "ssh://git@ssh.github.com:443/mounimb/x.git"  # GitHub's SSH over HTTPS port
+    assert resolve.remote_identity(over_443, identities).name == "perso"
+    assert resolve.remote_identity("https://www.github.com/mounimb/x", identities).name == "perso"
 
 
 def test_identity_without_email_is_ignored(home, make_repo):
@@ -62,6 +93,13 @@ def test_remote_check_sees_insteadof_rewrites_like_pre_push(home, make_repo):
     assert resolve.expected_for_repo(repo, store.list_identities())[1] == "GitHub owner mounimb"
 
 
+def test_remote_check_follows_pushurl_like_pre_push(home, make_repo):
+    add(home, "perso", "code", gh="mounimb")
+    repo = make_repo(home / "Desktop" / "x", remote="https://example.com/mirror/x.git")
+    git(repo, "remote", "set-url", "--push", "origin", "git@github.com:mounimb/x.git")
+    assert resolve.expected_for_repo(repo, store.list_identities())[1] == "GitHub owner mounimb"
+
+
 def test_worktree_expects_the_identity_git_applies(home, make_repo):
     # git matches includeIf gitdir against the git directory, which for a worktree
     # lives inside the main clone. git-shift must expect the same identity.
@@ -76,11 +114,20 @@ def test_worktree_expects_the_identity_git_applies(home, make_repo):
 
 
 def test_effective_from_identity(home, make_repo):
-    add(home)
+    identity = add(home, ssh_key=str(home / ".ssh" / "id_perso"))  # need not exist
     repo = make_repo(home / "code" / "app")
     eff = resolve.effective(repo, store.list_identities())
     assert (eff.email, eff.source, eff.identity) == ("perso@example.com", "identity", "perso")
     assert (eff.key, eff.name) == ("user.email", "Perso")
+    assert eff.ssh_command == store.ssh_command(identity.ssh_key)
+    assert eff.origin == paths.to_git_path(identity.path)
+
+
+def test_effective_ssh_command_variable_wins(home, make_repo, monkeypatch):
+    add(home, ssh_key=str(home / ".ssh" / "id_perso"))
+    repo = make_repo(home / "code" / "app")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i other")
+    assert resolve.effective(repo, store.list_identities()).ssh_command == "ssh -i other"
 
 
 def test_effective_local_override(home, make_repo):
@@ -100,11 +147,40 @@ def test_effective_local_override_from_a_subdirectory(home, make_repo):
     assert resolve.effective(subdir, store.list_identities()).source == "local"
 
 
+def test_effective_local_override_in_a_worktree(home, make_repo):
+    # a worktree reads the main clone's config, not one in its own git directory
+    add(home)
+    repo = make_repo(home / "code" / "app")
+    git(repo, "commit", "--allow-empty", "-q", "-m", "init")
+    git(repo, "config", "user.email", "other@example.com")
+    worktree = home / "elsewhere" / "wt"
+    git(repo, "worktree", "add", "-q", str(worktree))
+    assert resolve.effective(worktree, store.list_identities()).source == "local"
+
+
+def test_effective_command_line_value(home, make_repo, monkeypatch):
+    add(home)
+    repo = make_repo(home / "code" / "app")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")  # what `git -c user.email=...` passes on
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.email")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "cli@example.com")
+    eff = resolve.effective(repo, store.list_identities())
+    assert (eff.email, eff.source, eff.origin) == ("cli@example.com", "command line", None)
+
+
 def test_effective_global_set_after_include_wins(home, make_repo):
     add(home)
     git(home, "config", "--global", "user.email", "global@example.com")
     repo = make_repo(home / "code" / "app")
     assert resolve.effective(repo, store.list_identities()).source == "global"
+
+
+def test_effective_origin_is_normalised(home, make_repo, monkeypatch):
+    config = home / "alt.gitconfig"
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.fspath(config))  # backslashes on Windows
+    git(home, "config", "--global", "user.email", "alt@example.com")
+    eff = resolve.effective(make_repo(home / "plain"), [])
+    assert (eff.source, eff.origin) == ("global", paths.to_git_path(config))
 
 
 def test_effective_global_author_email_beats_identity(home, make_repo):
@@ -134,12 +210,12 @@ def test_effective_environment_override(home, make_repo, monkeypatch):
     assert eff.key == "GIT_AUTHOR_EMAIL"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Python on Windows cannot pass an empty variable")
 def test_effective_empty_author_email_variable_still_wins(home, make_repo, monkeypatch):
     add(home)
     repo = make_repo(home / "code" / "app")
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "")
-    assert "<>" in git(repo, "var", "GIT_AUTHOR_IDENT")  # git commits with an empty email
+    # git commits with an empty email
+    assert recorded_email(repo, env={**os.environ, "GIT_AUTHOR_EMAIL": ""}) == ""
     eff = resolve.effective(repo, store.list_identities())
     assert (eff.email, eff.source, eff.key) == ("", "environment", "GIT_AUTHOR_EMAIL")
 
@@ -169,6 +245,25 @@ def test_effective_email_variable_ignored_once_any_email_is_configured(
     monkeypatch.setenv("EMAIL", "env@example.com")
     assert "env@example.com" not in git(repo, "var", "GIT_AUTHOR_IDENT")
     assert resolve.effective(repo, []).source == "unset"
+
+
+@pytest.mark.parametrize("raw", ["<u@x.io>", " u@x.io ", "'u@x.io',", "u<@x>.io", "u@x.io\\"])
+def test_effective_cleans_the_email_like_git(home, make_repo, raw):
+    # status compares this email with the identity's, and the guard reads git var
+    repo = make_repo(home / "plain")
+    git(repo, "config", "user.name", "Tester")
+    git(repo, "config", "user.email", raw)
+    assert recorded_email(repo) == "u@x.io"
+    assert resolve.effective(repo, []).email == "u@x.io"
+
+
+@pytest.mark.parametrize("variable", ["GIT_AUTHOR_EMAIL", "EMAIL"])
+def test_effective_cleans_email_variables_like_git(home, make_repo, monkeypatch, variable):
+    repo = make_repo(home / "plain")
+    git(repo, "config", "user.name", "Tester")
+    monkeypatch.setenv(variable, " <e@x.io>; ")
+    assert recorded_email(repo) == "e@x.io"
+    assert resolve.effective(repo, []).email == "e@x.io"
 
 
 def test_effective_name_follows_git_precedence(home, make_repo, monkeypatch):

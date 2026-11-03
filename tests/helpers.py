@@ -21,8 +21,11 @@ GH_STATUS_SAMPLE = """github.com
 """
 
 
-def git(cwd: Path, *args: str) -> str:
-    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8")
+def git(cwd: Path, *args: str, env: dict[str, str] | None = None) -> str:
+    # env: Python on Windows passes an empty variable to children only through env=
+    proc = subprocess.run(
+        ["git", *args], cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8"
+    )
     if proc.returncode != 0:
         raise AssertionError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout.strip()
