@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Callable
 
-from . import __version__, store
+from . import __version__, gh, gitconfig, paths, resolve, store
 from .errors import GitShiftError
 
 OK, WARN, ERR = "✓", "!", "✗"
+GH_HOST = "github.com"
+GH_TOKEN_VARIABLES = ("GH_TOKEN", "GITHUB_TOKEN")  # gh prefers GH_TOKEN on github.com
 
 
 def cmd_add(args: argparse.Namespace) -> int:
@@ -48,10 +51,192 @@ def cmd_remove(args: argparse.Namespace) -> int:
     return 0
 
 
+_PLACES = {
+    "local": "this repo's local config (.git/config)",
+    "global": "your global git config",
+    "command line": "a -c option",
+}
+
+
+def _place(eff: resolve.Effective) -> str:
+    """Where an email set in git config comes from."""
+    if eff.source == "identity":
+        return f'identity "{eff.identity}"'
+    return _PLACES.get(eff.source) or eff.origin or eff.source
+
+
+def _describe_source(eff: resolve.Effective) -> str:
+    if eff.source == "unset":
+        return "nothing: no email configured"
+    if eff.source == "environment":
+        return f"the {eff.key} environment variable"  # GIT_AUTHOR_EMAIL or EMAIL
+    if eff.key == "author.email":
+        return f"author.email in {_place(eff)}"
+    return _place(eff)
+
+
+def _email_text(eff: resolve.Effective) -> str:
+    if eff.email is None:
+        return "(unset)"
+    return eff.email or "(empty)"
+
+
+def _explain_mismatch(eff: resolve.Effective, expected: store.Identity, reason: str) -> str:
+    # first the overrides that a local user.email cannot beat
+    if eff.key == "GIT_AUTHOR_EMAIL":
+        return "GIT_AUTHOR_EMAIL is set in your environment"
+    if eff.key == "author.email":
+        return f'author.email in {_place(eff)} replaces the email of "{expected.name}"'
+    if eff.source == "command line":
+        return f'a -c user.email option replaces the email of "{expected.name}"'
+    if reason.startswith("GitHub owner"):
+        if not expected.folder:
+            return (
+                f'this repo belongs to {expected.gh} on GitHub, but "{expected.name}" '
+                "has no usable folder"
+            )
+        return f"this repo belongs to {expected.gh} on GitHub but is outside {expected.folder}"
+    if eff.source == "unset":
+        return "no email is configured here"
+    if eff.source == "local":
+        return "overridden by this repo's local config (.git/config)"
+    if eff.source == "global" and reason.startswith("folder "):
+        return "your global git config overrides git-shift rules: run git shift doctor"
+    return f'the email comes from {_describe_source(eff)}, not from "{expected.name}"'
+
+
+def _override_fix(eff: resolve.Effective) -> str | None:
+    """The fix for an email that git takes before user.email, or None when a local
+    user.email wins (then `git shift use --here` is the fix)."""
+    if eff.key == "GIT_AUTHOR_EMAIL":
+        return "unset GIT_AUTHOR_EMAIL"
+    if eff.key == "author.email":
+        if eff.source in ("global", "local"):
+            return f"git config --{eff.source} --unset author.email"
+        if eff.source == "command line":
+            return "drop the -c author.email option"
+        return f"remove author.email from {eff.origin or eff.source}"
+    if eff.source == "command line":
+        return "drop the -c user.email option"
+    return None
+
+
+def _print_dangling_pin(cwd: str, identities: list[store.Identity], reason: str) -> None:
+    pin = resolve.pinned_name(cwd)
+    if pin is None or reason == resolve.PIN_REASON:  # no pin, or the pin applies
+        return
+    if any(identity.name == pin for identity in identities):
+        problem = "which has no email, so the pin is ignored"
+    else:
+        problem = "which no longer exists"
+    print(f'{WARN} this repo is pinned to "{pin}", {problem}')
+    print(f"  fix: git config --local --unset {resolve.PIN_KEY}")
+
+
+def _print_gh(expected: store.Identity | None) -> None:
+    """The gh account against the one the identity expects. Advice only: never changes
+    the exit code. Token variables are checked for presence, never shown."""
+    if expected is None or not expected.gh:
+        return
+    accounts = gh.accounts()
+    if accounts is None:
+        return
+    login = expected.gh
+    active = gh.active_login(accounts, GH_HOST)
+    if active is not None and active.casefold() == login.casefold():
+        print(f"gh:       {active} (active)")
+        return
+    print(f"gh:       active account is {active or 'none'}, expected {login}")
+    tokens = [name for name in GH_TOKEN_VARIABLES if os.environ.get(name)]  # gh ignores ""
+    known = [a for a in accounts if a.host == GH_HOST and a.login.casefold() == login.casefold()]
+    if tokens:  # gh auth switch refuses to run while one is set
+        problem = f"{tokens[0]} is set, so gh uses that token instead of its logins"
+        fix = f"unset {' '.join(tokens)}"
+    elif any(account.valid for account in known):
+        problem = f"{login} is logged in to gh but is not the active account"
+        fix = f"gh auth switch -h {GH_HOST} -u {login}"
+    elif known:
+        problem = f"the gh login of {login} is invalid or expired"
+        fix = f"gh auth login -h {GH_HOST}"
+    else:
+        problem = f"gh is not logged in as {login}"
+        fix = f"gh auth login -h {GH_HOST}"
+    print(f"{WARN} {problem}")
+    print(f"  fix: {fix}")
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    cwd = os.getcwd()
+    identities = store.list_identities()
+    root = resolve.repo_root(cwd)
+    found = resolve.expected_for_repo(cwd, identities)
+    expected, reason = found if found else (None, "")
+    print(f"repo:     {root or '(not a git repository)'}")
+    if expected is None:
+        print("expected: no identity matches this location")
+    else:
+        print(f'expected: "{expected.name}" <{expected.email}>  (matched by {reason})')
+    if root is None:
+        return 0
+    _print_dangling_pin(cwd, identities, reason)
+    eff = resolve.effective(cwd, identities)
+    print(f"email:    {_email_text(eff)}  (from {_describe_source(eff)})")
+    if eff.ssh_command:
+        print(f"ssh:      {eff.ssh_command}")
+    code = 0
+    if expected is not None and (eff.email or "").casefold() != expected.email.casefold():
+        print(f"{ERR} {_explain_mismatch(eff, expected, reason)}")
+        print(f"  fix: {_override_fix(eff) or f'git shift use {expected.name} --here'}")
+        code = 1
+    _print_gh(expected)
+    return code
+
+
+def cmd_use(args: argparse.Namespace) -> int:
+    if not args.here:
+        raise GitShiftError(
+            "use needs --here: folders switch automatically, --here pins the current repo"
+        )
+    identity = store.load(args.name)
+    for key, value in (("user.email", identity.email), ("user.name", identity.user_name)):
+        if not value:  # a hand-edited file: git would refuse to commit, or the guard block
+            raise GitShiftError(
+                f'identity "{identity.name}" has no {key} in {paths.to_git_path(identity.path)}: '
+                "set it there, or remove and re-add the identity"
+            )
+    cwd = os.getcwd()
+    if resolve.repo_root(cwd) is None:
+        raise GitShiftError("not inside a git repository")
+    gitconfig.set_value("user.name", identity.user_name, scope="local", cwd=cwd)
+    gitconfig.set_value("user.email", identity.email, scope="local", cwd=cwd)
+    if identity.ssh_key:
+        command = store.ssh_command(identity.ssh_key)
+        gitconfig.set_value("core.sshCommand", command, scope="local", cwd=cwd)
+    gitconfig.set_value(resolve.PIN_KEY, identity.name, scope="local", cwd=cwd)  # last
+    print(f'{OK} this repo now commits as {identity.email} ("{identity.name}")')
+
+    eff = resolve.effective(cwd, store.list_identities())
+    if (eff.email or "").casefold() != identity.email.casefold():
+        explanation = _explain_mismatch(eff, identity, resolve.PIN_REASON)
+        print(f"{WARN} but git still commits as {_email_text(eff)}: {explanation}")
+        fix = _override_fix(eff)
+        if fix:
+            print(f"  fix: {fix}")
+    if not identity.ssh_key and eff.ssh_command:
+        # git keeps the core.sshCommand of a folder rule, an earlier pin or GIT_SSH_COMMAND
+        print(
+            f'{WARN} "{identity.name}" has no SSH key, '
+            f"so this repo still uses {eff.ssh_command} for SSH"
+        )
+    return 0
+
+
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "add": cmd_add,
     "list": cmd_list,
     "remove": cmd_remove,
+    "status": cmd_status,
+    "use": cmd_use,
 }
 
 
@@ -78,6 +263,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     remove = sub.add_parser("remove", help="delete an identity")
     remove.add_argument("name", metavar="IDENTITY")
+
+    sub.add_parser("status", help="show which identity applies here, and why")
+
+    use = sub.add_parser("use", help="pin an identity on the current repository")
+    use.add_argument("name", metavar="IDENTITY")
+    use.add_argument("--here", action="store_true", help="write it to this repo's config")
     return parser
 
 

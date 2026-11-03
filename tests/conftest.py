@@ -16,6 +16,8 @@ def home(tmp_path, monkeypatch):
     for name in list(os.environ):
         if name.startswith("GIT_") or name == "EMAIL":  # also clears GIT_SHIFT_SKIP
             monkeypatch.delenv(name)
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):  # status reports them: tests opt in
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
