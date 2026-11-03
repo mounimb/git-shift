@@ -14,6 +14,8 @@ _LOGGED_IN = re.compile(r"Logged in to (\S+) (?:account|as) (\S+)")
 _FAILED = re.compile(r"Failed to log in to (\S+) account (\S+)")
 _TIMEOUT = re.compile(r"Timeout trying to log in to (\S+) account (\S+)")
 _ACTIVE = re.compile(r"- Active account: (true|false)")
+_SGR = re.compile(r"\x1b\[[0-9;]*m")
+_DEBUG_ENV = ("GH_DEBUG", "DEBUG")  # os.environ keys are upper case on Windows
 
 
 @dataclass(frozen=True)
@@ -31,8 +33,9 @@ def _header(line: str) -> GhAccount | None:
     elif match := _FAILED.search(line):
         valid = False
     elif match := _TIMEOUT.search(line):
-        # gh could not reach the host to check the token, so its validity is unknown.
-        # Count it as valid: a network problem must not be reported as a broken login.
+        # gh prints this only when the token check timed out, so the token's validity is
+        # unknown: count it as valid rather than report a login as broken. (Offline, with a
+        # DNS failure or a refused connection, gh says "Failed to log in" instead.)
         valid = True
     else:
         return None
@@ -48,6 +51,7 @@ def parse_auth_status(text: str) -> list[GhAccount]:
     to log in to H using token (GH_TOKEN)", a host line, a blank line) closes the block,
     so the flag after it is ignored rather than given to the previous account.
     """
+    text = _SGR.sub("", text)  # colour codes, if gh was forced to print them
     accounts: list[GhAccount] = []
     current: int | None = None  # index of the account whose detail lines are being read
     saw_active_flag = False
@@ -83,17 +87,19 @@ def accounts() -> list[GhAccount] | None:
     exe = _executable()
     if exe is None:
         return None
-    env = {
-        **os.environ,
-        "GH_NO_UPDATE_NOTIFIER": "1",
-        "GH_PROMPT_DISABLED": "1",
-        "GH_SPINNER_DISABLED": "1",
-        "NO_COLOR": "1",
-    }
+    # GH_DEBUG and DEBUG make gh print HTTP traces: keep them out of our pipes
+    env = {name: value for name, value in os.environ.items() if name not in _DEBUG_ENV}
+    env.update(
+        CLICOLOR_FORCE="0",  # otherwise it wins over NO_COLOR, even when piped
+        GH_NO_UPDATE_NOTIFIER="1",
+        GH_PROMPT_DISABLED="1",
+        GH_SPINNER_DISABLED="1",
+        NO_COLOR="1",
+    )
     try:
         proc = subprocess.run(
             [exe, "auth", "status"],
-            stdin=subprocess.DEVNULL,  # inside hooks, stdin belongs to git (pre-push refs)
+            stdin=subprocess.DEVNULL,  # gh never reads our stdin or waits on a prompt
             capture_output=True,
             text=True,
             encoding="utf-8",
