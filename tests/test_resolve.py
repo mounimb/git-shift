@@ -161,9 +161,8 @@ def test_effective_local_override_in_a_worktree(home, make_repo):
 def test_effective_command_line_value(home, make_repo, monkeypatch):
     add(home)
     repo = make_repo(home / "code" / "app")
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")  # what `git -c user.email=...` passes on
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.email")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "cli@example.com")
+    # what `git -c user.email=... shift status` passes on to git-shift's own git calls
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'user.email'='cli@example.com'")
     eff = resolve.effective(repo, store.list_identities())
     assert (eff.email, eff.source, eff.origin) == ("cli@example.com", "command line", None)
 
