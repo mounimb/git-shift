@@ -13,6 +13,8 @@ from .store import GIT_IDENT_CRUD, Identity
 _GITHUB_HOSTS = ("github.com", "www.github.com", "ssh.github.com")
 _EMAIL_CRUD = "".join(map(chr, range(33))) + GIT_IDENT_CRUD  # git's crud(): also c <= 32
 _EMAIL_DELIMITERS = str.maketrans("", "", "<>\n")
+PIN_KEY = "gitshift.identity"  # written to the repo's own config by `git shift use --here`
+PIN_REASON = "pin (git shift use --here)"
 
 
 @dataclass(frozen=True)
@@ -68,15 +70,35 @@ def origin_url(cwd: str | os.PathLike[str]) -> str | None:
     return (proc.stdout.strip() or None) if proc.returncode == 0 else None
 
 
+def _read_pin(cwd: str | os.PathLike[str]) -> str | None:
+    # --local reads only the repository's shared config (every worktree of a clone sees
+    # it), never the global one; it fails outside a repository, so callers check first
+    return gitconfig.get(PIN_KEY, scope="local", cwd=cwd) or None
+
+
+def pinned_name(cwd: str | os.PathLike[str]) -> str | None:
+    """The identity name `use --here` pinned on the repository in cwd, if any. It may name
+    an identity that no longer exists: expected_for_repo then ignores it."""
+    return _read_pin(cwd) if git_dir(cwd) is not None else None
+
+
 def expected_for_repo(
     cwd: str | os.PathLike[str], identities: list[Identity], remote_url: str | None = None
 ) -> tuple[Identity, str] | None:
-    """The identity a repository must use, and the reason (folder first, then remote).
+    """The identity a repository must use, and the reason: the repository's pin first,
+    then its folder, then its remote.
 
-    Folders are matched against the git directory, like includeIf gitdir, so worktrees
-    and separate git dirs agree with what git applies.
+    A pin naming a missing identity, or one without an email, is ignored. Folders are
+    matched against the git directory, like includeIf gitdir, so worktrees and separate
+    git dirs agree with what git applies.
     """
-    location = git_dir(cwd) or os.fspath(cwd)
+    directory = git_dir(cwd)
+    # the pin costs one git call: the guard runs this on every commit
+    name = _read_pin(cwd) if directory is not None else None
+    pinned = [identity for identity in identities if identity.name == name and identity.email]
+    if pinned:
+        return pinned[0], PIN_REASON
+    location = directory or os.fspath(cwd)
     identity = expected_identity(location, identities)
     if identity is not None:
         return identity, f"folder {identity.folder}"

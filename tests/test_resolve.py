@@ -113,6 +113,69 @@ def test_worktree_expects_the_identity_git_applies(home, make_repo):
     assert resolve.expected_for_repo(worktree, store.list_identities())[0].name == "perso"
 
 
+def test_pin_beats_folder(home, make_repo):
+    add(home, "perso", "code")
+    add(home, "pro", "work")
+    repo = make_repo(home / "code" / "app")
+    git(repo, "config", "--local", resolve.PIN_KEY, "pro")
+    assert resolve.pinned_name(repo) == "pro"
+    identity, reason = resolve.expected_for_repo(repo, store.list_identities())
+    assert (identity.name, reason) == ("pro", "pin (git shift use --here)")
+
+
+def test_pin_beats_remote(home, make_repo):
+    add(home, "perso", "code", gh="mounimb")
+    add(home, "pro", "work")
+    url = "git@github.com:mounimb/x.git"
+    repo = make_repo(home / "Desktop" / "x", remote=url)
+    git(repo, "config", "--local", resolve.PIN_KEY, "pro")
+    identities = store.list_identities()
+    assert resolve.expected_for_repo(repo, identities)[0].name == "pro"
+    assert resolve.expected_for_repo(repo, identities, remote_url=url)[0].name == "pro"  # pre-push
+
+
+def test_pin_applies_to_worktrees(home, make_repo):
+    # use --here writes the shared config, which every worktree of the clone reads
+    add(home, "perso", "code")
+    add(home, "pro", "work")
+    repo = make_repo(home / "code" / "app")
+    git(repo, "commit", "--allow-empty", "-q", "-m", "init")
+    git(repo, "config", "--local", resolve.PIN_KEY, "pro")
+    worktree = home / "code" / "wt"
+    git(repo, "worktree", "add", "-q", str(worktree))
+    assert resolve.expected_for_repo(worktree, store.list_identities())[0].name == "pro"
+
+
+@pytest.mark.parametrize("pin", ["gone", "pro", ""])
+def test_dangling_pin_is_ignored(home, make_repo, pin):
+    # a removed identity, one without an email (hand-edited), or an empty value
+    add(home, "perso", "code")
+    broken = add(home, "pro", "work")
+    git(home, "config", "--file", str(broken.path), "--unset", "user.email")
+    repo = make_repo(home / "code" / "app")
+    git(repo, "config", "--local", resolve.PIN_KEY, pin)
+    assert resolve.pinned_name(repo) == (pin or None)
+    identity, reason = resolve.expected_for_repo(repo, store.list_identities())
+    assert (identity.name, reason) == ("perso", f"folder {identity.folder}")
+
+
+def test_pin_outside_a_repository_is_no_error(home):
+    add(home, "perso", "code")
+    (home / "code").mkdir()
+    assert resolve.pinned_name(home / "code") is None
+    assert resolve.expected_for_repo(home / "code", store.list_identities())[0].name == "perso"
+
+
+def test_pin_in_the_global_config_is_ignored(home, make_repo):
+    # only the repository's own config can pin it
+    add(home, "perso", "code")
+    add(home, "pro", "work")
+    git(home, "config", "--global", resolve.PIN_KEY, "pro")
+    repo = make_repo(home / "code" / "app")
+    assert resolve.pinned_name(repo) is None
+    assert resolve.expected_for_repo(repo, store.list_identities())[0].name == "perso"
+
+
 def test_effective_from_identity(home, make_repo):
     identity = add(home, ssh_key=str(home / ".ssh" / "id_perso"))  # need not exist
     repo = make_repo(home / "code" / "app")
