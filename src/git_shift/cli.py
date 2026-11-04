@@ -234,6 +234,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 0
     _print_dangling_pin(cwd, identities, reason)
     eff = resolve.effective(cwd, identities)
+    if eff.name:
+        print(f"name:     {eff.name}")
     print(f"email:    {_email_text(eff)}  (from {_describe_source(eff)})")
     if eff.ssh_command:
         print(f"ssh:      {eff.ssh_command}")

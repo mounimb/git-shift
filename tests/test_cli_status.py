@@ -429,6 +429,38 @@ def test_status_explains_the_email(
         assert "git shift use" not in out
 
 
+def test_status_shows_the_author_name(home, make_repo, monkeypatch, capsys):
+    add(home)
+    monkeypatch.chdir(make_repo(home / "code" / "app"))
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    assert 'name:     Perso\nemail:    perso@example.com  (from identity "perso")\n' in (
+        capsys.readouterr().out
+    )
+
+
+def test_status_shows_a_global_author_name_beating_the_identity(
+    home, make_repo, monkeypatch, capsys
+):
+    add(home)
+    git(home, "config", "--global", "author.name", "Global Author")
+    repo = make_repo(home / "code" / "app")
+    assert git(repo, "var", "GIT_AUTHOR_IDENT").startswith("Global Author <perso@example.com>")
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "name:     Global Author\nemail:    " in out
+    assert "Perso" not in out
+
+
+def test_status_without_a_name_prints_no_name_line(home, make_repo, monkeypatch, capsys):
+    monkeypatch.chdir(make_repo(home / "plain"))
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    assert "name:" not in capsys.readouterr().out
+
+
 def test_status_shows_the_ssh_command(home, make_repo, monkeypatch, capsys):
     add(home, "perso", "code", "--ssh-key", str(home / ".ssh" / "id_perso"))
     monkeypatch.chdir(make_repo(home / "code" / "app"))
