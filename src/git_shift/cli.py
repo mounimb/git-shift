@@ -179,25 +179,37 @@ def _print_gh(expected: store.Identity | None) -> None:
     print(f"  fix: {fix}")
 
 
+def _written_ssh_commands(identities: list[store.Identity]) -> set[str]:
+    """The commands git-shift writes, in a folder rule or with use --here."""
+    return {store.ssh_command(identity.ssh_key) for identity in identities if identity.ssh_key}
+
+
 def _print_ssh_warning(
     identity: store.Identity, eff: resolve.Effective, identities: list[store.Identity]
 ) -> None:
-    """Warn when SSH does not use what the identity expects. Nothing is unset automatically.
+    """Say that SSH does not use what the identity expects. Nothing is unset automatically.
 
     The fix is only printed for a command git-shift wrote (a folder rule, an earlier pin):
-    any other may be the user's own ssh program, which must stay. With a key, it would also
-    overwrite the command just written. Plain ssh counts as "no key": the fix sets it.
+    any other may be the user's own ssh program, which must stay. With a key, plain ssh would
+    be just as wrong. Without one, plain ssh counts as "no key": the fix sets it.
     """
-    expected = store.ssh_command(identity.ssh_key) if identity.ssh_key else PLAIN_SSH
-    if not eff.ssh_command or eff.ssh_command == expected:
-        return
     has = f"uses the key {identity.ssh_key}" if identity.ssh_key else "has no SSH key"
-    print(f'{WARN} this repo still uses {eff.ssh_command} for SSH, but "{identity.name}" {has}')
-    written = {store.ssh_command(other.ssh_key) for other in identities if other.ssh_key}
+    command = eff.ssh_command or "plain ssh"
+    print(f'{WARN} this repo still uses {command} for SSH, but "{identity.name}" {has}')
     if os.environ.get("GIT_SSH_COMMAND"):
         print("  fix: unset the GIT_SSH_COMMAND environment variable")
-    elif not identity.ssh_key and eff.ssh_command in written:
+    elif not identity.ssh_key and eff.ssh_command in _written_ssh_commands(identities):
         print(f"  fix: git config --local --replace-all core.sshCommand {PLAIN_SSH}")
+
+
+def _pushes_use_the_wrong_key(
+    identity: store.Identity, eff: resolve.Effective, identities: list[store.Identity]
+) -> bool:
+    """When status warns. Without a key, only another identity's command counts: any other
+    is the user's own setup, and warning about it would repeat on every run."""
+    if identity.ssh_key:
+        return eff.ssh_command != store.ssh_command(identity.ssh_key)
+    return eff.ssh_command in _written_ssh_commands(identities)
 
 
 def _repo_text(cwd: str, root: str | None) -> str:
@@ -230,6 +242,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"{ERR} {_explain_mismatch(eff, expected, reason)}")
         print(f"  fix: {_override_fix(eff) or f'git shift use {expected.name} --here'}")
         code = 1
+    if expected is not None and _pushes_use_the_wrong_key(expected, eff, identities):
+        _print_ssh_warning(expected, eff, identities)  # advice only, like the gh lines
     _print_gh(expected)
     return code
 
@@ -270,7 +284,10 @@ def cmd_use(args: argparse.Namespace) -> int:
         fix = _override_fix(eff)
         if fix:
             print(f"  fix: {fix}")
-    _print_ssh_warning(identity, eff, identities)
+    # stricter than status: a pin should leave SSH as the identity wants it
+    wanted = store.ssh_command(identity.ssh_key) if identity.ssh_key else PLAIN_SSH
+    if eff.ssh_command and eff.ssh_command != wanted:
+        _print_ssh_warning(identity, eff, identities)
     return 0
 
 

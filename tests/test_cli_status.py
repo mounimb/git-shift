@@ -476,6 +476,162 @@ def test_status_without_a_working_tree(home, make_repo, monkeypatch, capsys, ins
     assert "email:" not in out
 
 
+# --- status warns when pushes would use the wrong key, and only then ----------------------
+
+
+def test_status_warns_about_the_key_of_the_folder_after_a_pin(home, make_repo, monkeypatch, capsys):
+    # the identity's email is right, so nothing else says that pushes use the other key
+    add(home, "keyed", "code", "--ssh-key", str(home / ".ssh" / "id_keyed"))
+    add(home, "pro", "work")
+    repo = make_repo(home / "code" / "app")
+    monkeypatch.chdir(repo)
+    assert main(["use", "pro", "--here"]) == 0
+    capsys.readouterr()
+    assert main(["status"]) == 0  # advice only
+    out = capsys.readouterr().out
+    command = store.ssh_command(paths.to_git_path(home / ".ssh" / "id_keyed"))
+    assert f'! this repo still uses {command} for SSH, but "pro" has no SSH key' in out
+    assert "  fix: git config --local --replace-all core.sshCommand ssh" in out
+
+    run_printed_fix(out, repo)
+    assert main(["status"]) == 0  # plain ssh is what "pro" wants: no more warning
+    out = capsys.readouterr().out
+    assert "ssh:      ssh\n" in out
+    assert "!" not in out and "fix:" not in out
+
+
+def test_status_warns_when_the_ssh_variable_holds_the_key_of_another_identity(
+    home, make_repo, monkeypatch, capsys
+):
+    add(home, "keyed", "code", "--ssh-key", str(home / ".ssh" / "id_keyed"))
+    add(home, "pro", "work")
+    command = store.ssh_command(paths.to_git_path(home / ".ssh" / "id_keyed"))
+    monkeypatch.chdir(make_repo(home / "work" / "app"))
+    monkeypatch.setenv("GIT_SSH_COMMAND", command)
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert f'! this repo still uses {command} for SSH, but "pro" has no SSH key' in out
+    assert "  fix: unset the GIT_SSH_COMMAND environment variable" in out
+
+
+@pytest.mark.parametrize(
+    ("config", "env", "command", "fix"),
+    [
+        pytest.param(
+            [],
+            {"GIT_SSH_COMMAND": "ssh -i other"},
+            "ssh -i other",
+            "unset the GIT_SSH_COMMAND environment variable",
+            id="variable",
+        ),
+        pytest.param(
+            [("--local", "core.sshCommand", "ssh -i other")], {}, "ssh -i other", None, id="local"
+        ),
+        pytest.param(
+            [("--global", "core.sshCommand", "ssh -i other")], {}, "ssh -i other", None, id="global"
+        ),
+        pytest.param([("--local", "core.sshCommand", "ssh")], {}, "ssh", None, id="plain-ssh"),
+    ],
+)
+def test_status_warns_when_a_keyed_identity_does_not_use_its_key(
+    home, make_repo, monkeypatch, capsys, config, env, command, fix
+):
+    key = home / ".ssh" / "id_keyed"
+    add(home, "keyed", "code", "--ssh-key", str(key))
+    repo = make_repo(home / "code" / "app")
+    for args in config:
+        git(repo, "config", *args)
+    monkeypatch.chdir(repo)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    has = f"uses the key {paths.to_git_path(key)}"
+    assert f'! this repo still uses {command} for SSH, but "keyed" {has}' in out
+    assert (f"  fix: {fix}\n" in out) if fix else ("fix:" not in out)
+
+
+def test_status_warns_when_a_keyed_identity_has_no_ssh_command_here(
+    home, make_repo, monkeypatch, capsys
+):
+    # matched by its GitHub owner, outside its folder: its folder rule sets no command here
+    key = home / ".ssh" / "id_keyed"
+    add(home, "keyed", "code", "--gh", "mounimb", "--ssh-key", str(key))
+    git(home, "config", "--global", "user.email", "keyed@example.com")
+    monkeypatch.chdir(make_repo(home / "Desktop" / "x", remote="git@github.com:mounimb/x.git"))
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "ssh:" not in out
+    has = f"uses the key {paths.to_git_path(key)}"
+    assert f'! this repo still uses plain ssh for SSH, but "keyed" {has}' in out
+
+
+OWN_SSH_PROGRAM = "C:/Windows/System32/OpenSSH/ssh.exe"
+
+
+@pytest.mark.parametrize(
+    ("folder", "config", "env", "shown"),
+    [
+        pytest.param(
+            "work/app",
+            [("--global", "core.sshCommand", OWN_SSH_PROGRAM)],
+            {},
+            OWN_SSH_PROGRAM,
+            id="own-program-in-global-config",
+        ),
+        pytest.param(
+            "work/app",
+            [("--local", "core.sshCommand", OWN_SSH_PROGRAM)],
+            {},
+            OWN_SSH_PROGRAM,
+            id="own-program-in-local-config",
+        ),
+        pytest.param(
+            "work/app",
+            [],
+            {"GIT_SSH_COMMAND": OWN_SSH_PROGRAM},
+            OWN_SSH_PROGRAM,
+            id="own-program-in-variable",
+        ),
+        pytest.param(
+            "work/app", [("--global", "core.sshCommand", "ssh")], {}, "ssh", id="plain-ssh"
+        ),
+        pytest.param("work/app", [], {}, None, id="no-key-no-command"),
+        pytest.param("code/app", [], {}, "{keyed}", id="keyed-with-its-command"),
+        pytest.param(
+            "Desktop/x",
+            [("--global", "core.sshCommand", "{keyed}")],
+            {},
+            "{keyed}",
+            id="no-identity-expected",
+        ),
+    ],
+)
+def test_status_gives_no_ssh_warning(
+    home, make_repo, monkeypatch, capsys, folder, config, env, shown
+):
+    add(home, "keyed", "code", "--ssh-key", str(home / ".ssh" / "id_keyed"))
+    add(home, "pro", "work")
+    keyed = store.ssh_command(paths.to_git_path(home / ".ssh" / "id_keyed"))
+    repo = make_repo(home / folder)
+    for scope, key, value in config:
+        git(repo, "config", scope, key, value.format(keyed=keyed))
+    monkeypatch.chdir(repo)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "!" not in out and "fix:" not in out
+    if shown:
+        assert f"ssh:      {shown.format(keyed=keyed)}\n" in out
+    else:
+        assert "ssh:" not in out
+
+
 # --- use --here --------------------------------------------------------------------------
 
 
