@@ -1,7 +1,7 @@
 import shlex
 
 import pytest
-from helpers import git, write_fake_gh
+from helpers import git, make_git_refuse, write_fake_gh
 
 from git_shift import gh, gitconfig, paths, resolve, store
 from git_shift.cli import main
@@ -54,6 +54,62 @@ def test_status_outside_repo(home, monkeypatch, capsys):
     monkeypatch.chdir(home)
     assert main(["status"]) == 0
     assert "(not a git repository)" in capsys.readouterr().out
+
+
+# --- git refuses the repository: that is not "no repository" ------------------------------
+
+
+def test_status_when_git_refuses_the_repository(home, make_repo, monkeypatch, capsys):
+    add(home)
+    repo = make_repo(home / "code" / "app")
+    make_git_refuse(repo)
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    assert main(["status"]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("git-shift: error: ")
+    assert "unknown repository extension found:\n\tfoo" in captured.err  # every line
+    assert "not a git repository" not in captured.out + captured.err
+
+
+def test_use_here_when_git_refuses_the_repository(home, make_repo, monkeypatch, capsys):
+    add(home)
+    repo = make_repo(home / "code" / "app")
+    make_git_refuse(repo)
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    assert main(["use", "perso", "--here"]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("git-shift: error: ")
+    assert "unknown repository extension found:\n\tfoo" in captured.err
+    assert "not inside a git repository" not in captured.err
+    assert gitconfig.get(resolve.PIN_KEY, file=repo / ".git" / "config") is None
+
+
+def test_status_with_a_valueless_email_in_the_repo_config(home, make_repo, monkeypatch, capsys):
+    add(home)
+    repo = make_repo(home / "code" / "app")
+    with open(repo / ".git" / "config", "a", encoding="utf-8") as config:
+        config.write("[user]\n\temail\n")
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    assert main(["status"]) == 2
+    err = capsys.readouterr().err
+    assert "missing value for 'user.email'" in err
+    assert "bad config variable 'user.email'" in err
+
+
+def test_status_prints_the_fix_git_gives_for_dubious_ownership(
+    home, make_repo, monkeypatch, capsys
+):
+    add(home)
+    monkeypatch.chdir(make_repo(home / "code" / "app"))
+    monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+    capsys.readouterr()
+    assert main(["status"]) == 2
+    err = capsys.readouterr().err
+    assert "detected dubious ownership" in err
+    assert "git config --global --add safe.directory" in err
 
 
 def test_use_here_pins_identity(home, make_repo, monkeypatch):

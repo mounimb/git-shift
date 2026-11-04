@@ -1,4 +1,4 @@
-"""Errors shown to the user as one-line messages, without a traceback."""
+"""Errors shown to the user as plain messages, without a traceback."""
 
 
 class GitShiftError(Exception):

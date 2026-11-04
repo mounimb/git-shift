@@ -20,8 +20,12 @@ class Origin:
 
 
 def run_git(
-    *args: str, cwd: str | Path | None = None, check: bool = True
+    *args: str,
+    cwd: str | Path | None = None,
+    check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    """Run git. env: variables to set for this call, on top of the current environment."""
     exe = paths.find_executable("git")
     if exe is None:
         raise GitShiftError("git is not installed or not on PATH")
@@ -29,6 +33,7 @@ def run_git(
         proc = subprocess.run(
             [exe, *args],
             cwd=cwd,
+            env={**os.environ, **env} if env else None,
             stdin=subprocess.DEVNULL,  # inside hooks, stdin belongs to git (pre-push refs)
             capture_output=True,
             text=True,

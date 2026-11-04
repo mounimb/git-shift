@@ -1,10 +1,12 @@
 import os
 import re
+import subprocess
 
 import pytest
-from helpers import git
+from helpers import git, make_git_refuse
 
 from git_shift import gitconfig, paths, resolve, store
+from git_shift.errors import GitShiftError
 
 
 def add(home, name="perso", folder="code", gh=None, ssh_key=None):
@@ -174,6 +176,80 @@ def test_pin_in_the_global_config_is_ignored(home, make_repo):
     repo = make_repo(home / "code" / "app")
     assert resolve.pinned_name(repo) is None
     assert resolve.expected_for_repo(repo, store.list_identities())[0].name == "perso"
+
+
+def test_probes_outside_a_repository(home):
+    assert resolve.repo_root(home) is None
+    assert resolve.git_dir(home) is None
+
+
+@pytest.mark.parametrize("inside", ["bare", ".git"])
+def test_probes_without_a_working_tree(home, make_repo, inside):
+    # status and use tell this from "not a repository" by asking git_dir
+    if inside == "bare":
+        directory = home / "bare.git"
+        directory.mkdir()
+        git(directory, "init", "-q", "--bare")
+    else:
+        directory = make_repo(home / "plain") / ".git"
+    assert resolve.repo_root(directory) is None
+    assert resolve.git_dir(directory) == paths.to_git_path(directory)
+
+
+@pytest.mark.parametrize("probe", [resolve.repo_root, resolve.git_dir])
+def test_probes_raise_when_git_refuses_the_repository(home, make_repo, probe):
+    repo = make_repo(home / "plain")
+    make_git_refuse(repo)
+    with pytest.raises(GitShiftError, match=r"unknown repository extension found:\s+foo"):
+        probe(repo)
+
+
+@pytest.mark.parametrize("probe", [resolve.repo_root, resolve.git_dir])
+def test_probes_keep_everything_git_says(home, make_repo, monkeypatch, probe):
+    # the folder name must not read as git's "not a git repository" message
+    repo = make_repo(home / "not a git repository")
+    monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+    with pytest.raises(GitShiftError) as exc:
+        probe(repo)
+    assert "detected dubious ownership" in str(exc.value)
+    assert "git config --global --add safe.directory" in str(exc.value)
+
+
+def test_probes_read_git_messages_untranslated(home, monkeypatch):
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.setenv(name, "fr_FR.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "fr")
+    real = gitconfig.run_git
+    seen = []
+
+    def recording(*args, **kwargs):
+        seen.append(kwargs["env"]["LC_ALL"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gitconfig, "run_git", recording)
+    assert resolve.repo_root(home) is None  # a real check where git has French messages
+    assert resolve.git_dir(home) is None
+    assert seen == ["C", "C"]  # not every git install has them, so check the variable too
+
+
+def test_probes_know_the_message_of_older_git(home, monkeypatch):
+    # git before 2.16 wrote "Not a git repository"; git-shift supports 2.13 and later
+    stderr = "fatal: Not a git repository (or any of the parent directories): .git\n"
+    failed = subprocess.CompletedProcess([], 128, stdout="", stderr=stderr)
+    monkeypatch.setattr(gitconfig, "run_git", lambda *args, **kwargs: failed)
+    assert resolve.repo_root(home) is None
+    assert resolve.git_dir(home) is None
+
+
+def test_expected_for_repo_and_pin_raise_when_git_refuses_the_repository(home, make_repo):
+    # never guess from the folder alone; the guard catches this and fails open
+    add(home)
+    repo = make_repo(home / "code" / "app")
+    make_git_refuse(repo)
+    with pytest.raises(GitShiftError, match="unknown repository extension"):
+        resolve.expected_for_repo(repo, store.list_identities())
+    with pytest.raises(GitShiftError, match="unknown repository extension"):
+        resolve.pinned_name(repo)
 
 
 def test_effective_from_identity(home, make_repo):

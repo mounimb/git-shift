@@ -31,6 +31,12 @@ def git(cwd: Path, *args: str, env: dict[str, str] | None = None) -> str:
     return proc.stdout.strip()
 
 
+def make_git_refuse(repo: Path) -> None:
+    """Make every git command that needs a repository fail in repo, on any platform."""
+    git(repo, "config", "core.repositoryformatversion", "1")
+    git(repo, "config", "extensions.foo", "bar")
+
+
 def write_fake_gh(directory: Path, output: str, stream: str = "stdout", exit_code: int = 0) -> Path:
     """Create a fake `gh` executable that prints `output`, whatever its arguments.
 

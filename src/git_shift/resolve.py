@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import gitconfig, paths, remotes
+from .errors import GitShiftError
 from .store import GIT_IDENT_CRUD, Identity
 
 # ssh.github.com is GitHub's SSH over port 443 (ssh://git@ssh.github.com:443/owner/repo)
@@ -16,6 +17,10 @@ _EMAIL_DELIMITERS = str.maketrans("", "", "<>\n")
 PIN_KEY = "gitshift.identity"  # written to the repo's own config by `git shift use --here`
 PIN_REASON = "pin in .git/config"
 _WORKTREE_CONFIG = "config.worktree"
+# git's words, read with LC_ALL=C because they can be translated. With "fatal:", so a folder
+# named like this in another message (dubious ownership quotes the path) does not match.
+_NOT_A_REPOSITORY = "fatal: not a git repository"
+_NO_WORK_TREE = "fatal: this operation must be run in a work tree"
 
 
 @dataclass(frozen=True)
@@ -50,18 +55,31 @@ def remote_identity(url: str, identities: list[Identity]) -> Identity | None:
     return None
 
 
-def repo_root(cwd: str | os.PathLike[str]) -> str | None:
-    proc = gitconfig.run_git("rev-parse", "--show-toplevel", cwd=cwd, check=False)
-    if proc.returncode != 0:
+def _probe(cwd: str | os.PathLike[str], option: str, *absent: str) -> str | None:
+    """What `git rev-parse option` prints, or None if it fails with one of the absent messages.
+
+    Any other failure means git refuses to work here (dubious ownership, unknown repository
+    extension, bad config), which must not read as "no repository". It raises with all git
+    said: for dubious ownership, the following lines give the safe.directory fix.
+    """
+    proc = gitconfig.run_git("rev-parse", option, cwd=cwd, check=False, env={"LC_ALL": "C"})
+    if proc.returncode == 0:
+        return proc.stdout.strip() or None
+    stderr = proc.stderr.strip()
+    if any(message in stderr.lower() for message in absent):  # git < 2.16: "Not a git ..."
         return None
-    return proc.stdout.strip() or None
+    raise GitShiftError(f"git failed here:\n{stderr or f'exit code {proc.returncode}'}")
+
+
+def repo_root(cwd: str | os.PathLike[str]) -> str | None:
+    """The top of the working tree, or None outside a repository or without a working tree
+    (a bare repository, or inside .git). Raises when git refuses to work here."""
+    return _probe(cwd, "--show-toplevel", _NOT_A_REPOSITORY, _NO_WORK_TREE)
 
 
 def git_dir(cwd: str | os.PathLike[str]) -> str | None:
-    proc = gitconfig.run_git("rev-parse", "--absolute-git-dir", cwd=cwd, check=False)
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.strip() or None
+    """The git directory, or None outside a repository. Raises when git refuses to work here."""
+    return _probe(cwd, "--absolute-git-dir", _NOT_A_REPOSITORY)
 
 
 def origin_url(cwd: str | os.PathLike[str]) -> str | None:

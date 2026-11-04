@@ -77,6 +77,15 @@ def test_run_git_never_uses_a_git_from_the_current_directory(home, monkeypatch):
     assert gitconfig.run_git("--version").stdout.startswith("git version")
 
 
+def test_run_git_env_adds_to_the_environment(home):
+    git(home, "config", "--global", "user.name", "Tester")
+    env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "x.y", "GIT_CONFIG_VALUE_0": "z"}
+    assert gitconfig.run_git("config", "x.y", env=env).stdout.strip() == "z"
+    # the rest of the environment still reaches git, here HOME
+    assert gitconfig.run_git("config", "user.name", env=env).stdout.strip() == "Tester"
+    assert "GIT_CONFIG_COUNT" not in os.environ
+
+
 def test_home_fixture_hides_every_real_config(home):
     proc = gitconfig.run_git("config", "--show-origin", "--list", check=False)
     assert proc.stdout == ""
