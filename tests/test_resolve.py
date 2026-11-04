@@ -47,6 +47,26 @@ def test_expected_identity_breaks_ties_like_git(home, make_repo):
     assert resolve.expected_identity(repo, store.list_identities()).name == "pro"
 
 
+@pytest.mark.parametrize(("folder", "variant"), [("straße", "STRASSE"), ("É", "é")])
+def test_expected_identity_folds_case_like_git(home, make_repo, folder, variant):
+    # A case-insensitive filesystem can make both names one folder, and each platform then
+    # spells the path its own way: compare what git matched with what git reports.
+    (home / folder).mkdir()
+    add(home, "perso", folder)
+    identities = store.list_identities()
+
+    inside = make_repo(home / folder / "inside")
+    assert gitconfig.get("user.email", cwd=inside) == "perso@example.com"
+    assert resolve.expected_identity(resolve.git_dir(inside), identities).name == "perso"
+
+    repo = make_repo(home / variant / "app")
+    applied = gitconfig.get("user.email", cwd=repo)
+    expected = resolve.expected_identity(resolve.git_dir(repo), identities)
+    assert (expected.email if expected else None) == applied
+    if not (home / folder).samefile(home / variant):
+        assert applied is None  # two folders: git folds A-Z only, so this one has no identity
+
+
 def test_remote_identity_matches_github_owner(home):
     add(home, gh="mounimb")
     identities = store.list_identities()

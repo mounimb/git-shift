@@ -289,7 +289,7 @@ def add_identity(
     folder_rule = paths.to_folder_rule(folder)
     existing = list_identities()
     for other in existing:
-        if other.folder.casefold() == folder_rule.casefold():
+        if paths.fold_ascii(other.folder) == paths.fold_ascii(folder_rule):
             raise GitShiftError(f'folder {folder_rule} is already used by "{other.name}"')
 
     warnings = []

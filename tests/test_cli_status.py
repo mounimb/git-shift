@@ -50,6 +50,17 @@ def test_status_remote_rule_outside_folders(home, make_repo, monkeypatch, capsys
     assert "GitHub owner mounimb" in capsys.readouterr().out
 
 
+def test_status_does_not_match_a_folder_git_does_not(home, make_repo, monkeypatch, capsys):
+    # str.casefold makes these equal, gitdir/i does not: exit 1 would ask for a pointless fix
+    add(home, "perso", "straße")
+    repo = make_repo(home / "STRASSE" / "app")
+    assert gitconfig.get("user.email", cwd=repo) is None
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    assert "expected: no identity matches this location" in capsys.readouterr().out
+
+
 def test_status_outside_repo(home, monkeypatch, capsys):
     monkeypatch.chdir(home)
     assert main(["status"]) == 0

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import string
 from pathlib import Path
 
 
@@ -91,11 +92,19 @@ def gitdir_pattern(folder_rule: str) -> str:
     return folder_rule.translate(_WILDMATCH_SPECIAL)
 
 
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def fold_ascii(text: str) -> str:
+    """Lowercase A-Z and nothing else, like includeIf gitdir/i: to git, "É" is not "é"."""
+    return text.translate(_ASCII_LOWER)
+
+
 def is_within(path: str | os.PathLike[str], folder_rule: str) -> bool:
-    """True if path is the folder itself or inside it. Case-insensitive, like gitdir/i."""
+    """True if path is the folder itself or inside it. Ignores case the way gitdir/i does."""
     if not folder_rule.endswith("/"):
         return False  # not made by to_folder_rule (empty or hand-edited)
-    return to_folder_rule(path).casefold().startswith(folder_rule.casefold())
+    return fold_ascii(to_folder_rule(path)).startswith(fold_ascii(folder_rule))
 
 
 def depth(folder_rule: str) -> int:

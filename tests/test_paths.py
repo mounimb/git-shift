@@ -76,6 +76,21 @@ def test_is_within_matches_folder_and_subfolders_case_insensitively(tmp_path):
     assert not paths.is_within(tmp_path / "Codebase", rule)
 
 
+def test_fold_ascii_lowers_only_a_to_z():
+    assert paths.fold_ascii("C:/Users/ÉVA/Straße/Σ") == "c:/users/Éva/straße/Σ"
+
+
+@pytest.mark.parametrize(
+    ("folder", "variant"),
+    [("straße", "STRASSE"), ("STRASSE", "straße"), ("É", "é"), ("é", "É"), ("Σ", "σ")],
+)
+def test_is_within_folds_only_ascii_case_like_git(tmp_path, folder, variant):
+    # includeIf gitdir/i lowers A-Z only. Nothing here exists, so no filesystem folds it either.
+    rule = paths.to_folder_rule(tmp_path / folder)
+    assert paths.is_within(tmp_path / folder / "app", rule)
+    assert not paths.is_within(tmp_path / variant / "app", rule)
+
+
 def test_is_within_rejects_malformed_rules(tmp_path):
     assert not paths.is_within(tmp_path / "code", "")
     bare = paths.to_folder_rule(tmp_path / "Code").rstrip("/")

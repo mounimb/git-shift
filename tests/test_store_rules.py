@@ -57,6 +57,14 @@ def test_duplicate_name_or_folder_rejected(home):
         add(home, "b", "a")
 
 
+def test_duplicate_folder_check_folds_case_like_git(home):
+    # to git these are two rules, so both identities can apply; only A-Z is folded
+    add(home, "a", "straße")
+    add(home, "b", "STRASSE")
+    with pytest.raises(GitShiftError, match='already used by "b"'):
+        add(home, "c", "strasse")
+
+
 def test_missing_ssh_key_warns(home):
     _, warnings = add(home, ssh_key=str(home / ".ssh" / "nope"))
     assert any("SSH key" in w for w in warnings)
