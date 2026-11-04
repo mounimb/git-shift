@@ -241,11 +241,17 @@ def test_status_author_email_in_an_included_file(home, make_repo, monkeypatch, c
     add(home)
     extra = home / "extra.gitconfig"
     extra.write_text("[author]\n\temail = extra@example.com\n", encoding="utf-8")
-    git(home, "config", "--global", "include.path", str(extra))
-    monkeypatch.chdir(make_repo(home / "code" / "app"))
+    git(home, "config", "--global", "--add", "include.path", str(extra))  # keeps git-shift's
+    repo = make_repo(home / "code" / "app")
+    assert git(repo, "config", "user.email") == "perso@example.com"  # the rule still applies
+    monkeypatch.chdir(repo)
     capsys.readouterr()
     assert main(["status"]) == 1
-    assert f"  fix: remove author.email from {paths.to_git_path(extra)}" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    location = paths.to_git_path(extra)
+    assert f"extra@example.com  (from author.email in {location})" in out
+    assert f"author.email in {location} replaces the email of" in out
+    assert f"  fix: remove author.email from {location}" in out
 
 
 @pytest.mark.parametrize(

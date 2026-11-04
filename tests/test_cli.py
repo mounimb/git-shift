@@ -3,6 +3,7 @@ import subprocess
 import sys
 
 import pytest
+from helpers import git
 
 from git_shift import __version__, paths, store
 from git_shift.cli import main
@@ -79,6 +80,52 @@ def test_piped_output_is_utf8(home):
     proc = subprocess.run([sys.executable, "-m", "git_shift", *args], capture_output=True, env=env)
     out = proc.stdout.decode("utf-8")
     assert out.startswith("✓ ") and "Łukasz" in out
+
+
+def test_full_flow_in_a_folder_with_a_space_and_an_accent(home, make_repo):
+    # Real processes and repos, in the home fixture's environment. No --gh: the fixture hides
+    # gh only in this process, so a child could start the real one. The path text is never
+    # compared, as filesystems may normalise it: names and emails say what matched.
+    folder = home / "Zoë code"
+    repo = make_repo(folder / "app")
+
+    def shift(*args, code=0):
+        command = [sys.executable, "-m", "git_shift", *args]
+        proc = subprocess.run(command, cwd=repo, capture_output=True)
+        assert proc.returncode == code, proc.stderr.decode("utf-8")
+        return proc.stdout.decode("utf-8")
+
+    out = shift("add", "zoe", "--email", "zoe@example.com", "--name", "Zoë Doe", "--folder", folder)
+    assert out.startswith('✓ identity "zoe" created\n')
+    assert " now commit as zoe@example.com\n" in out
+    shift("add", "pro", "--email", "pro@example.com", "--name", "Pro", "--folder", home / "work")
+
+    out = shift("status")
+    assert out.startswith("repo:     ")
+    assert 'expected: "zoe" <zoe@example.com>  (matched by folder ' in out
+    assert "name:     Zoë Doe\n" in out
+    assert 'email:    zoe@example.com  (from identity "zoe")\n' in out
+    git(repo, "commit", "--allow-empty", "-q", "-m", "as zoe")
+    assert git(repo, "log", "-1", "--format=%an <%ae>") == "Zoë Doe <zoe@example.com>"
+
+    out = shift("use", "pro", "--here")
+    assert out == '✓ this repo now commits as pro@example.com ("pro")\n'
+
+    out = shift("status")
+    assert 'expected: "pro" <pro@example.com>  (matched by pin in .git/config)\n' in out
+    assert "name:     Pro\n" in out
+    assert "email:    pro@example.com  (from this repo's .git/config)\n" in out
+    git(repo, "commit", "--allow-empty", "-q", "-m", "as pro")
+    assert git(repo, "log", "-1", "--format=%an <%ae>") == "Pro <pro@example.com>"
+
+    assert shift("remove", "pro") == '✓ identity "pro" removed\n'
+
+    out = shift("status", code=1)  # the email of pro stays in .git/config
+    assert 'expected: "zoe" <zoe@example.com>  (matched by folder ' in out
+    assert '! this repo is pinned to "pro", which does not exist\n' in out
+    assert "email:    pro@example.com  (from this repo's .git/config)\n" in out
+    assert "✗ overridden by this repo's local config (.git/config)\n" in out
+    assert "  fix: git shift use zoe --here\n" in out
 
 
 def test_add_passes_every_option_and_prints_warnings(home, capsys):
