@@ -266,10 +266,12 @@ machine.
 - `0` success, also when `use --here` wrote the pin but warns that another email still wins
 - `1` a check failed (`status` email mismatch, `doctor` problems, guard block), or an
   unexpected error
-- `2` usage error, or an expected error such as a git command that failed
+- `2` usage error, or an expected error such as a git command that failed, including git
+  refusing to work in a repository (dubious ownership, unknown repository extension)
 - `130` interrupted with Ctrl-C
 
-Expected errors print a one-line message; `--debug` adds the traceback.
+Expected errors print a message without a traceback, including all git said when git refused;
+`--debug` adds the traceback.
 
 ## Testing
 
