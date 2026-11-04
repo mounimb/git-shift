@@ -113,3 +113,12 @@ def test_unset_removes_every_value(home):
     gitconfig.add_value("include.path", "/b", scope="global")
     gitconfig.unset("include.path", scope="global")
     assert gitconfig.get_all("include.path", scope="global") == []
+
+
+def test_set_value_replace_all_overwrites_every_value(home):
+    gitconfig.add_value("user.email", "one@example.com", scope="global")
+    gitconfig.add_value("user.email", "two@example.com", scope="global")
+    with pytest.raises(GitShiftError):  # git refuses to overwrite several values with one
+        gitconfig.set_value("user.email", "new@example.com", scope="global")
+    gitconfig.set_value("user.email", "new@example.com", scope="global", replace_all=True)
+    assert gitconfig.get_all("user.email", scope="global") == ["new@example.com"]

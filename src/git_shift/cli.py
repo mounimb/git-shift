@@ -13,6 +13,7 @@ from .errors import GitShiftError
 OK, WARN, ERR = "✓", "!", "✗"
 GH_HOST = "github.com"
 GH_TOKEN_VARIABLES = ("GH_TOKEN", "GITHUB_TOKEN")  # gh prefers GH_TOKEN on github.com
+PLAIN_SSH = "ssh"  # as core.sshCommand, it overrides a command inherited from elsewhere
 
 
 def cmd_add(args: argparse.Namespace) -> int:
@@ -52,9 +53,10 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
 
 _PLACES = {
-    "local": "this repo's local config (.git/config)",
+    "local": "this repo's .git/config",
+    "worktree": "this worktree's config.worktree",
     "global": "your global git config",
-    "command line": "a -c option",
+    "command line": "a -c option or GIT_CONFIG_* variable",  # git reports both the same way
 }
 
 
@@ -85,10 +87,13 @@ def _explain_mismatch(eff: resolve.Effective, expected: store.Identity, reason: 
     # first the overrides that a local user.email cannot beat
     if eff.key == "GIT_AUTHOR_EMAIL":
         return "GIT_AUTHOR_EMAIL is set in your environment"
-    if eff.key == "author.email":
-        return f'author.email in {_place(eff)} replaces the email of "{expected.name}"'
+    if eff.key == "author.email" or eff.source == "worktree":
+        return f'{eff.key} in {_place(eff)} replaces the email of "{expected.name}"'
     if eff.source == "command line":
-        return f'a -c user.email option replaces the email of "{expected.name}"'
+        return (
+            "a -c user.email option or GIT_CONFIG_* variable "
+            f'replaces the email of "{expected.name}"'
+        )
     if reason.startswith("GitHub owner"):
         if not expected.folder:
             return (
@@ -106,19 +111,26 @@ def _explain_mismatch(eff: resolve.Effective, expected: store.Identity, reason: 
 
 
 def _override_fix(eff: resolve.Effective) -> str | None:
-    """The fix for an email that git takes before user.email, or None when a local
-    user.email wins (then `git shift use --here` is the fix)."""
+    """The fix for an email that a local user.email cannot beat, or None when it can (then
+    `git shift use --here` is the fix). --unset-all: plain --unset fails on several values."""
     if eff.key == "GIT_AUTHOR_EMAIL":
         return "unset GIT_AUTHOR_EMAIL"
-    if eff.key == "author.email":
-        if eff.source in ("global", "local"):
-            return f"git config --{eff.source} --unset author.email"
-        if eff.source == "command line":
-            return "drop the -c author.email option"
-        return f"remove author.email from {eff.origin or eff.source}"
+    if eff.source == "worktree":
+        return f"git config --worktree --unset-all {eff.key}"
     if eff.source == "command line":
-        return "drop the -c user.email option"
-    return None
+        return f"drop the -c {eff.key} option or GIT_CONFIG_* variable"
+    if eff.key != "author.email":
+        return None
+    if eff.source == "local":
+        return "git config --local --unset-all author.email"
+    if eff.source == "global":
+        # git reads both global files, but --global only writes the first one that exists
+        first = store.global_config_file()
+        if first is not None and paths.to_git_path(first).casefold() == eff.origin.casefold():
+            return "git config --global --unset-all author.email"
+        # double quotes work in bash, PowerShell and cmd
+        return f'git config --file "{eff.origin}" --unset-all author.email'
+    return f"remove author.email from {eff.origin or eff.source}"
 
 
 def _print_dangling_pin(cwd: str, identities: list[store.Identity], reason: str) -> None:
@@ -128,9 +140,9 @@ def _print_dangling_pin(cwd: str, identities: list[store.Identity], reason: str)
     if any(identity.name == pin for identity in identities):
         problem = "which has no email, so the pin is ignored"
     else:
-        problem = "which no longer exists"
+        problem = "which does not exist"  # removed since, or a typo
     print(f'{WARN} this repo is pinned to "{pin}", {problem}')
-    print(f"  fix: git config --local --unset {resolve.PIN_KEY}")
+    print(f"  fix: git config --local --unset-all {resolve.PIN_KEY}")
 
 
 def _print_gh(expected: store.Identity | None) -> None:
@@ -153,7 +165,7 @@ def _print_gh(expected: store.Identity | None) -> None:
         problem = f"{tokens[0]} is set, so gh uses that token instead of its logins"
         fix = f"unset {' '.join(tokens)}"
     elif any(account.valid for account in known):
-        problem = f"{login} is logged in to gh but is not the active account"
+        problem = None  # the line above says it all
         fix = f"gh auth switch -h {GH_HOST} -u {login}"
     elif known:
         problem = f"the gh login of {login} is invalid or expired"
@@ -161,8 +173,31 @@ def _print_gh(expected: store.Identity | None) -> None:
     else:
         problem = f"gh is not logged in as {login}"
         fix = f"gh auth login -h {GH_HOST}"
-    print(f"{WARN} {problem}")
+    if problem:
+        print(f"{WARN} {problem}")
     print(f"  fix: {fix}")
+
+
+def _print_ssh_warning(identity: store.Identity, eff: resolve.Effective) -> None:
+    """Warn when SSH does not use what the identity expects: GIT_SSH_COMMAND, or for an
+    identity without a key the command of a folder rule or an earlier pin. Nothing is unset
+    automatically. Plain ssh counts as "no key": it is what the printed fix sets."""
+    expected = store.ssh_command(identity.ssh_key) if identity.ssh_key else PLAIN_SSH
+    if not eff.ssh_command or eff.ssh_command == expected:
+        return
+    has = f"uses the key {identity.ssh_key}" if identity.ssh_key else "has no SSH key"
+    print(f'{WARN} this repo still uses {eff.ssh_command} for SSH, but "{identity.name}" {has}')
+    if os.environ.get("GIT_SSH_COMMAND"):
+        print("  fix: unset GIT_SSH_COMMAND")
+    elif not identity.ssh_key:  # with a key, this would overwrite the command just written
+        print(f"  fix: git config --local core.sshCommand {PLAIN_SSH}")
+
+
+def _repo_text(cwd: str, root: str | None) -> str:
+    if root:
+        return root
+    directory = resolve.git_dir(cwd)  # a bare repository, or inside .git
+    return f"{directory} (no working tree)" if directory else "(not a git repository)"
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -171,7 +206,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     root = resolve.repo_root(cwd)
     found = resolve.expected_for_repo(cwd, identities)
     expected, reason = found if found else (None, "")
-    print(f"repo:     {root or '(not a git repository)'}")
+    print(f"repo:     {_repo_text(cwd, root)}")
     if expected is None:
         print("expected: no identity matches this location")
     else:
@@ -207,27 +242,25 @@ def cmd_use(args: argparse.Namespace) -> int:
     cwd = os.getcwd()
     if resolve.repo_root(cwd) is None:
         raise GitShiftError("not inside a git repository")
-    gitconfig.set_value("user.name", identity.user_name, scope="local", cwd=cwd)
-    gitconfig.set_value("user.email", identity.email, scope="local", cwd=cwd)
+    entries = [("user.name", identity.user_name), ("user.email", identity.email)]
     if identity.ssh_key:
-        command = store.ssh_command(identity.ssh_key)
-        gitconfig.set_value("core.sshCommand", command, scope="local", cwd=cwd)
-    gitconfig.set_value(resolve.PIN_KEY, identity.name, scope="local", cwd=cwd)  # last
-    print(f'{OK} this repo now commits as {identity.email} ("{identity.name}")')
+        entries.append(("core.sshCommand", store.ssh_command(identity.ssh_key)))
+    entries.append((resolve.PIN_KEY, identity.name))  # last: a pin means the rest is written
+    for key, value in entries:
+        gitconfig.set_value(key, value, scope="local", cwd=cwd, replace_all=True)
 
     eff = resolve.effective(cwd, store.list_identities())
-    if (eff.email or "").casefold() != identity.email.casefold():
-        explanation = _explain_mismatch(eff, identity, resolve.PIN_REASON)
-        print(f"{WARN} but git still commits as {_email_text(eff)}: {explanation}")
+    if (eff.email or "").casefold() == identity.email.casefold():
+        print(f'{OK} this repo now commits as {identity.email} ("{identity.name}")')
+    else:
+        print(
+            f'{WARN} pinned "{identity.name}" on this repo, but git still commits as '
+            f"{_email_text(eff)} (from {_describe_source(eff)})"
+        )
         fix = _override_fix(eff)
         if fix:
             print(f"  fix: {fix}")
-    if not identity.ssh_key and eff.ssh_command:
-        # git keeps the core.sshCommand of a folder rule, an earlier pin or GIT_SSH_COMMAND
-        print(
-            f'{WARN} "{identity.name}" has no SSH key, '
-            f"so this repo still uses {eff.ssh_command} for SSH"
-        )
+    _print_ssh_warning(identity, eff)
     return 0
 
 

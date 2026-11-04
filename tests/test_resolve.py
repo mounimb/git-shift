@@ -4,7 +4,7 @@ import re
 import pytest
 from helpers import git
 
-from git_shift import paths, resolve, store
+from git_shift import gitconfig, paths, resolve, store
 
 
 def add(home, name="perso", folder="code", gh=None, ssh_key=None):
@@ -120,7 +120,7 @@ def test_pin_beats_folder(home, make_repo):
     git(repo, "config", "--local", resolve.PIN_KEY, "pro")
     assert resolve.pinned_name(repo) == "pro"
     identity, reason = resolve.expected_for_repo(repo, store.list_identities())
-    assert (identity.name, reason) == ("pro", "pin (git shift use --here)")
+    assert (identity.name, reason) == ("pro", "pin in .git/config")
 
 
 def test_pin_beats_remote(home, make_repo):
@@ -219,6 +219,59 @@ def test_effective_local_override_in_a_worktree(home, make_repo):
     worktree = home / "elsewhere" / "wt"
     git(repo, "worktree", "add", "-q", str(worktree))
     assert resolve.effective(worktree, store.list_identities()).source == "local"
+
+
+def worktree_config(repo, key="user.email", value="wt@example.com"):
+    git(repo, "config", "extensions.worktreeConfig", "true")
+    git(repo, "config", "--worktree", key, value)
+
+
+def test_effective_config_worktree(home, make_repo):
+    # it beats .git/config, so use --here cannot fix what it sets
+    add(home)
+    repo = make_repo(home / "code" / "app")
+    worktree_config(repo)
+    subdir = repo / "src" / "deep"
+    subdir.mkdir(parents=True)
+    for cwd in (repo, subdir):
+        eff = resolve.effective(cwd, store.list_identities())
+        assert (eff.email, eff.source, eff.key) == ("wt@example.com", "worktree", "user.email")
+
+
+def test_effective_config_worktree_of_a_linked_worktree(home, make_repo):
+    add(home)
+    repo = make_repo(home / "code" / "app")
+    git(repo, "commit", "--allow-empty", "-q", "-m", "init")
+    linked = home / "code" / "wt"
+    git(repo, "worktree", "add", "-q", str(linked))
+    worktree_config(linked)
+    assert resolve.effective(linked, store.list_identities()).source == "worktree"
+    assert resolve.effective(repo, store.list_identities()).source == "identity"
+
+
+def test_effective_file_named_config_worktree_elsewhere_is_other(home, make_repo):
+    extra = home / "config.worktree"
+    extra.write_text("[user]\n\temail = extra@example.com\n", encoding="utf-8")
+    git(home, "config", "--global", "include.path", str(extra))
+    assert resolve.effective(make_repo(home / "plain"), []).source == "other"
+
+
+def test_classifying_an_ordinary_config_never_looks_for_config_worktree(
+    home, make_repo, monkeypatch
+):
+    add(home)
+    repo = make_repo(home / "code" / "app")
+    git(repo, "config", "user.email", "other@example.com")
+    calls = []
+    real = gitconfig.run_git
+
+    def recording(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gitconfig, "run_git", recording)
+    assert resolve.effective(repo, store.list_identities()).source == "local"
+    assert not [call for call in calls if "--git-path" in call]
 
 
 def test_effective_command_line_value(home, make_repo, monkeypatch):

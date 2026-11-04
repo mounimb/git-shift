@@ -14,7 +14,8 @@ _GITHUB_HOSTS = ("github.com", "www.github.com", "ssh.github.com")
 _EMAIL_CRUD = "".join(map(chr, range(33))) + GIT_IDENT_CRUD  # git's crud(): also c <= 32
 _EMAIL_DELIMITERS = str.maketrans("", "", "<>\n")
 PIN_KEY = "gitshift.identity"  # written to the repo's own config by `git shift use --here`
-PIN_REASON = "pin (git shift use --here)"
+PIN_REASON = "pin in .git/config"
+_WORKTREE_CONFIG = "config.worktree"
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,7 @@ class Effective:
     email: str | None
     name: str | None
     ssh_command: str | None
-    source: str  # identity | local | global | environment | command line | other | unset
+    source: str  # identity | local | worktree | global | environment | command line | other | unset
     identity: str | None = None
     origin: str | None = None  # config file (git path form) when the email comes from one
     key: str | None = None  # GIT_AUTHOR_EMAIL | author.email | user.email | EMAIL; None if unset
@@ -117,6 +118,14 @@ def _local_config(cwd: str | os.PathLike[str]) -> str | None:
     return paths.to_git_path(Path(cwd) / proc.stdout.strip() / "config")
 
 
+def _worktree_config(cwd: str | os.PathLike[str]) -> str | None:
+    # --git-path is relative to cwd (or absolute); each worktree has its own file
+    proc = gitconfig.run_git("rev-parse", "--git-path", _WORKTREE_CONFIG, cwd=cwd, check=False)
+    if proc.returncode != 0:
+        return None
+    return paths.to_git_path(Path(cwd) / proc.stdout.strip())
+
+
 def _classify(
     origin: gitconfig.Origin, identities: list[Identity], cwd: str | os.PathLike[str]
 ) -> tuple[str, str | None]:
@@ -128,6 +137,10 @@ def _classify(
             return "identity", identity.name
     if path == (_local_config(cwd) or "").casefold():
         return "local", None
+    # the name decides first, so an ordinary config costs no extra git call
+    if os.path.basename(path) == _WORKTREE_CONFIG:
+        if path == (_worktree_config(cwd) or "").casefold():
+            return "worktree", None
     global_files = paths.global_config_files()
     if path in {paths.to_git_path(file).casefold() for file in global_files}:
         return "global", None

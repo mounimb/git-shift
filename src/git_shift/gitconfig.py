@@ -105,10 +105,14 @@ def list_entries(*, scope=None, file=None, cwd=None) -> list[tuple[str, str]]:
     return entries
 
 
-def set_value(key: str, value: str, *, scope=None, file=None, cwd=None) -> None:
+def set_value(
+    key: str, value: str, *, scope=None, file=None, cwd=None, replace_all: bool = False
+) -> None:
+    """Set one value. git refuses (exit 5) when the key has several, unless replace_all."""
     if file is not None:
         Path(file).parent.mkdir(parents=True, exist_ok=True)
-    run_git("config", *_where(scope, file), key, value, cwd=cwd)
+    flags = ["--replace-all"] if replace_all else []
+    run_git("config", *_where(scope, file), *flags, key, value, cwd=cwd)
 
 
 def add_value(key: str, value: str, *, scope=None, file=None, cwd=None) -> None:
