@@ -263,9 +263,11 @@ machine.
 
 ### Exit codes
 
-- `0` success
-- `1` a check failed (`doctor` problems, guard block)
-- `2` usage error
+- `0` success, also when `use --here` wrote the pin but warns that another email still wins
+- `1` a check failed (`status` email mismatch, `doctor` problems, guard block), or an
+  unexpected error
+- `2` usage error, or an expected error such as a git command that failed
+- `130` interrupted with Ctrl-C
 
 Expected errors print a one-line message; `--debug` adds the traceback.
 
