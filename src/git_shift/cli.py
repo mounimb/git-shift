@@ -226,7 +226,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if eff.ssh_command:
         print(f"ssh:      {eff.ssh_command}")
     code = 0
-    if expected is not None and (eff.email or "").casefold() != expected.email.casefold():
+    if expected is not None and not resolve.same_email(eff.email, expected.email):
         print(f"{ERR} {_explain_mismatch(eff, expected, reason)}")
         print(f"  fix: {_override_fix(eff) or f'git shift use {expected.name} --here'}")
         code = 1
@@ -260,7 +260,7 @@ def cmd_use(args: argparse.Namespace) -> int:
 
     identities = store.list_identities()
     eff = resolve.effective(cwd, identities)
-    if (eff.email or "").casefold() == identity.email.casefold():
+    if resolve.same_email(eff.email, identity.email):
         print(f'{OK} this repo now commits as {identity.email} ("{identity.name}")')
     else:
         print(

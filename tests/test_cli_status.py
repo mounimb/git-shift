@@ -50,6 +50,26 @@ def test_status_remote_rule_outside_folders(home, make_repo, monkeypatch, capsys
     assert "GitHub owner mounimb" in capsys.readouterr().out
 
 
+def test_status_and_use_compare_emails_the_way_git_records_them(
+    home, make_repo, monkeypatch, capsys
+):
+    add(home)
+    path = store.identity_path("perso")
+    git(home, "config", "--file", str(path), "user.email", "<perso@example.com>")  # hand-edited
+    repo = make_repo(home / "code" / "app")
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert 'perso@example.com  (from identity "perso")' in out
+    assert "✗" not in out
+    assert main(["use", "perso", "--here"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("✓ this repo now commits as")
+    assert "!" not in out
+    assert main(["status"]) == 0
+
+
 def test_status_does_not_match_a_folder_git_does_not(home, make_repo, monkeypatch, capsys):
     # str.casefold makes these equal, gitdir/i does not: exit 1 would ask for a pointless fix
     add(home, "perso", "straße")

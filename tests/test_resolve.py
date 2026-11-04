@@ -477,6 +477,37 @@ def test_effective_cleans_email_variables_like_git(home, make_repo, monkeypatch,
     assert resolve.effective(repo, []).email == "e@x.io"
 
 
+@pytest.mark.parametrize(
+    ("one", "other"),
+    [
+        ("me@example.com", "me@example.com"),
+        ("me@example.com", "ME@Example.COM"),
+        ("<me@example.com>", "me@example.com"),
+        (" 'me@example.com', ", "<ME@example.com>"),
+        ("me<@example>.com", "me@example.com"),
+        (None, None),  # no email at all: nothing tells them apart
+        (None, ""),
+    ],
+)
+def test_same_email(one, other):
+    assert resolve.same_email(one, other)
+    assert resolve.same_email(other, one)
+
+
+@pytest.mark.parametrize(
+    ("one", "other"),
+    [
+        ("me@example.com", "you@example.com"),
+        ("me@example.com", None),
+        ("me@example.com", ""),
+        ("me@example.com", "<>"),  # git records nothing for this one
+    ],
+)
+def test_same_email_differs(one, other):
+    assert not resolve.same_email(one, other)
+    assert not resolve.same_email(other, one)
+
+
 def test_effective_name_follows_git_precedence(home, make_repo, monkeypatch):
     add(home)
     repo = make_repo(home / "code" / "app")

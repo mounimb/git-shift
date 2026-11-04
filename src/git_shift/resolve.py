@@ -171,6 +171,12 @@ def _clean_email(email: str) -> str:
     return email.strip(_EMAIL_CRUD).translate(_EMAIL_DELIMITERS)
 
 
+def same_email(one: str | None, other: str | None) -> bool:
+    """True if git records the same address for both, ignoring case. A missing or empty
+    email never equals a real one."""
+    return _clean_email(one or "").casefold() == _clean_email(other or "").casefold()
+
+
 def _author_name(cwd: str | os.PathLike[str]) -> str | None:
     """The name git commits with: GIT_AUTHOR_NAME, then author.name, then user.name."""
     env_name = os.environ.get("GIT_AUTHOR_NAME")
