@@ -53,7 +53,7 @@ A guard (global `pre-commit` and `pre-push` hooks) is added on top of approach 1
 | `git shift list` | List identities and their folders |
 | `git shift status` | Show which identity applies in the current directory, why, and the effective email, SSH key and `gh` account |
 | `git shift remove <name>` | Delete an identity and its include rule |
-| `git shift use <name> --here` | Force an identity on the current repository only |
+| `git shift use <name> --here` | Pin an identity on the current repository only; the pin beats the folder and remote rules |
 | `git shift doctor` | Health checks (see Error handling) |
 | `git shift guard install` / `uninstall` | Install or remove the commit/push guard |
 
@@ -171,7 +171,8 @@ src/git_shift/
 1. Ask git for the effective `user.email`, `user.name` and `core.sshCommand`
    with `--show-origin`.
 2. Map the origin file back to an identity, or report "global default",
-   "repository-local override" or "none".
+   "repository-local override" or "none". `author.email` and `GIT_AUTHOR_EMAIL` beat
+   `user.email` in git, so they are checked first, and each cause gets its own fix.
 3. Read the expected `gh` login from the identity and compare it with the
    active `gh` account.
 
@@ -206,7 +207,7 @@ directory.
 
 | Hook | Rule |
 |---|---|
-| `pre-commit` | If the repository is inside an identity's folder, the effective `user.email` must equal that identity's email. |
+| `pre-commit` | If the repository is pinned with `use --here`, or else inside an identity's folder, the author email git will record must equal that identity's email. |
 | `pre-commit` | If the repository is outside every folder but its `origin` owner matches an identity's `gh` login, that identity's email is required. |
 | `pre-push` | Every commit being pushed (from the ranges git passes on stdin) must have the expected author email. |
 
