@@ -222,7 +222,7 @@ PIN_PRO = [("--local", "gitshift.identity", "pro")]
             [
                 "email:    (empty)  (from the GIT_AUTHOR_EMAIL environment variable)",
                 "✗ GIT_AUTHOR_EMAIL is set in your environment",
-                "  fix: unset GIT_AUTHOR_EMAIL",
+                "  fix: unset the GIT_AUTHOR_EMAIL environment variable",
             ],
             id="empty-author-variable",
         ),
@@ -234,7 +234,7 @@ PIN_PRO = [("--local", "gitshift.identity", "pro")]
             [
                 "email:    env@example.com  (from the GIT_AUTHOR_EMAIL environment variable)",
                 "✗ GIT_AUTHOR_EMAIL is set in your environment",
-                "  fix: unset GIT_AUTHOR_EMAIL",
+                "  fix: unset the GIT_AUTHOR_EMAIL environment variable",
             ],
             id="author-variable",
         ),
@@ -365,16 +365,20 @@ def test_status_remote_rule_for_an_identity_without_folder(home, make_repo, monk
     assert "  fix: git shift use perso --here" in out
 
 
+def git_directory_without_a_working_tree(home, make_repo, inside):
+    if inside == ".git":
+        return make_repo(home / "code" / "app") / ".git"
+    directory = home / "code" / "bare.git"
+    directory.mkdir(parents=True)
+    git(directory, "init", "-q", "--bare")
+    return directory
+
+
 @pytest.mark.parametrize("inside", ["bare", ".git"])
 def test_status_without_a_working_tree(home, make_repo, monkeypatch, capsys, inside):
     # a git directory, so "not a git repository" would be wrong; nothing commits from here
     add(home)
-    if inside == "bare":
-        directory = home / "code" / "bare.git"
-        directory.mkdir(parents=True)
-        git(directory, "init", "-q", "--bare")
-    else:
-        directory = make_repo(home / "code" / "app") / ".git"
+    directory = git_directory_without_a_working_tree(home, make_repo, inside)
     monkeypatch.chdir(directory)
     capsys.readouterr()
     assert main(["status"]) == 0
@@ -476,7 +480,7 @@ def test_use_here_warns_when_a_folder_ssh_key_still_applies(home, make_repo, mon
     out = capsys.readouterr().out
     command = store.ssh_command(paths.to_git_path(home / ".ssh" / "id_perso"))
     assert f'! this repo still uses {command} for SSH, but "pro" has no SSH key' in out
-    assert "  fix: git config --local core.sshCommand ssh" in out
+    assert "  fix: git config --local --replace-all core.sshCommand ssh" in out
 
 
 def test_use_here_warns_about_the_key_of_an_earlier_pin(home, make_repo, monkeypatch, capsys):
@@ -490,12 +494,42 @@ def test_use_here_warns_about_the_key_of_an_earlier_pin(home, make_repo, monkeyp
     out = capsys.readouterr().out
     command = store.ssh_command(paths.to_git_path(home / ".ssh" / "id_keyed"))
     assert f'! this repo still uses {command} for SSH, but "pro" has no SSH key' in out
-    assert "  fix: git config --local core.sshCommand ssh" in out
+    assert "  fix: git config --local --replace-all core.sshCommand ssh" in out
 
     run_printed_fix(out, repo)
     assert git(repo, "config", "--local", "core.sshCommand") == "ssh"
     assert main(["use", "pro", "--here"]) == 0  # plain ssh is what "pro" wants: no more warning
     assert "SSH" not in capsys.readouterr().out
+
+
+def test_use_here_ssh_fix_works_on_several_values(home, make_repo, monkeypatch, capsys):
+    add(home, "keyed", "code", "--ssh-key", str(home / ".ssh" / "id_keyed"))
+    add(home, "pro", "work")
+    repo = make_repo(home / "Desktop" / "y")
+    command = store.ssh_command(paths.to_git_path(home / ".ssh" / "id_keyed"))
+    git(repo, "config", "--local", "--add", "core.sshCommand", "ssh -i old")
+    git(repo, "config", "--local", "--add", "core.sshCommand", command)  # the last one applies
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    assert main(["use", "pro", "--here"]) == 0
+    run_printed_fix(capsys.readouterr().out, repo)
+    assert gitconfig.get_all("core.sshCommand", scope="local", cwd=repo) == ["ssh"]
+
+
+def test_use_here_never_suggests_replacing_the_users_own_ssh_program(
+    home, make_repo, monkeypatch, capsys
+):
+    # git-shift did not write this command: the fix would replace their program in this repo
+    program = "C:/Windows/System32/OpenSSH/ssh.exe"
+    add(home, "keyed", "code", "--ssh-key", str(home / ".ssh" / "id_keyed"))
+    add(home, "pro", "work")
+    git(home, "config", "--global", "core.sshCommand", program)
+    monkeypatch.chdir(make_repo(home / "Desktop" / "y"))
+    capsys.readouterr()
+    assert main(["use", "pro", "--here"]) == 0
+    out = capsys.readouterr().out
+    assert f'! this repo still uses {program} for SSH, but "pro" has no SSH key' in out
+    assert "fix:" not in out
 
 
 @pytest.mark.parametrize(
@@ -513,7 +547,7 @@ def test_use_here_warns_when_the_ssh_variable_wins(home, make_repo, monkeypatch,
     out = capsys.readouterr().out
     has = has.format(key=paths.to_git_path(key))
     assert f'! this repo still uses ssh -i other for SSH, but "{name}" {has}' in out
-    assert "  fix: unset GIT_SSH_COMMAND" in out
+    assert "  fix: unset the GIT_SSH_COMMAND environment variable" in out
 
 
 def test_use_here_never_suggests_overwriting_the_key_it_just_wrote(
@@ -550,7 +584,7 @@ def test_use_here_never_suggests_overwriting_the_key_it_just_wrote(
             None,
             {"GIT_AUTHOR_EMAIL": "other@example.com"},
             "the GIT_AUTHOR_EMAIL environment variable",
-            "unset GIT_AUTHOR_EMAIL",
+            "unset the GIT_AUTHOR_EMAIL environment variable",
             id="author-variable",
         ),
         pytest.param(
@@ -618,6 +652,19 @@ def test_use_here_outside_a_repository(home, capsys):
     add(home, "pro", "work")
     assert main(["use", "pro", "--here"]) == 2
     assert "not inside a git repository" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("inside", ["bare", ".git"])
+def test_use_here_without_a_working_tree(home, make_repo, monkeypatch, capsys, inside):
+    add(home, "pro", "work")
+    directory = git_directory_without_a_working_tree(home, make_repo, inside)
+    monkeypatch.chdir(directory)
+    capsys.readouterr()
+    assert main(["use", "pro", "--here"]) == 2
+    err = capsys.readouterr().err
+    assert "no working tree" in err
+    assert "not inside a git repository" not in err
+    assert gitconfig.get(resolve.PIN_KEY, scope="local", cwd=directory) is None
 
 
 @pytest.mark.parametrize(
@@ -746,7 +793,7 @@ def test_status_gh_token_variable(home, make_repo, monkeypatch, capsys, tmp_path
     output = account("alice", True) + account("mounimb", False)
     out = status_with_gh(home, make_repo, monkeypatch, capsys, tmp_path, output)
     assert f"! {variable} is set, so gh uses that token instead of its logins" in out
-    assert f"  fix: unset {variable}" in out
+    assert f"  fix: unset the {variable} environment variable\n" in out
     assert "gh auth switch" not in out
     assert "dummy-value" not in out  # presence only: the value is never shown
 
@@ -757,7 +804,7 @@ def test_status_gh_both_token_variables(home, make_repo, monkeypatch, capsys, tm
     output = account("alice", True)
     out = status_with_gh(home, make_repo, monkeypatch, capsys, tmp_path, output)
     assert "! GH_TOKEN is set, so gh uses that token" in out  # GH_TOKEN wins in gh
-    assert "  fix: unset GH_TOKEN GITHUB_TOKEN" in out
+    assert "  fix: unset the GH_TOKEN and GITHUB_TOKEN environment variables\n" in out
 
 
 def test_status_without_gh_prints_no_gh_line(home, make_repo, monkeypatch, capsys):

@@ -114,7 +114,7 @@ def _override_fix(eff: resolve.Effective) -> str | None:
     """The fix for an email that a local user.email cannot beat, or None when it can (then
     `git shift use --here` is the fix). --unset-all: plain --unset fails on several values."""
     if eff.key == "GIT_AUTHOR_EMAIL":
-        return "unset GIT_AUTHOR_EMAIL"
+        return "unset the GIT_AUTHOR_EMAIL environment variable"  # the command depends on the shell
     if eff.source == "worktree":
         return f"git config --worktree --unset-all {eff.key}"
     if eff.source == "command line":
@@ -163,7 +163,8 @@ def _print_gh(expected: store.Identity | None) -> None:
     known = [a for a in accounts if a.host == GH_HOST and a.login.casefold() == login.casefold()]
     if tokens:  # gh auth switch refuses to run while one is set
         problem = f"{tokens[0]} is set, so gh uses that token instead of its logins"
-        fix = f"unset {' '.join(tokens)}"
+        plural = "s" if len(tokens) > 1 else ""
+        fix = f"unset the {' and '.join(tokens)} environment variable{plural}"
     elif any(account.valid for account in known):
         problem = None  # the line above says it all
         fix = f"gh auth switch -h {GH_HOST} -u {login}"
@@ -178,19 +179,25 @@ def _print_gh(expected: store.Identity | None) -> None:
     print(f"  fix: {fix}")
 
 
-def _print_ssh_warning(identity: store.Identity, eff: resolve.Effective) -> None:
-    """Warn when SSH does not use what the identity expects: GIT_SSH_COMMAND, or for an
-    identity without a key the command of a folder rule or an earlier pin. Nothing is unset
-    automatically. Plain ssh counts as "no key": it is what the printed fix sets."""
+def _print_ssh_warning(
+    identity: store.Identity, eff: resolve.Effective, identities: list[store.Identity]
+) -> None:
+    """Warn when SSH does not use what the identity expects. Nothing is unset automatically.
+
+    The fix is only printed for a command git-shift wrote (a folder rule, an earlier pin):
+    any other may be the user's own ssh program, which must stay. With a key, it would also
+    overwrite the command just written. Plain ssh counts as "no key": the fix sets it.
+    """
     expected = store.ssh_command(identity.ssh_key) if identity.ssh_key else PLAIN_SSH
     if not eff.ssh_command or eff.ssh_command == expected:
         return
     has = f"uses the key {identity.ssh_key}" if identity.ssh_key else "has no SSH key"
     print(f'{WARN} this repo still uses {eff.ssh_command} for SSH, but "{identity.name}" {has}')
+    written = {store.ssh_command(other.ssh_key) for other in identities if other.ssh_key}
     if os.environ.get("GIT_SSH_COMMAND"):
-        print("  fix: unset GIT_SSH_COMMAND")
-    elif not identity.ssh_key:  # with a key, this would overwrite the command just written
-        print(f"  fix: git config --local core.sshCommand {PLAIN_SSH}")
+        print("  fix: unset the GIT_SSH_COMMAND environment variable")
+    elif not identity.ssh_key and eff.ssh_command in written:
+        print(f"  fix: git config --local --replace-all core.sshCommand {PLAIN_SSH}")
 
 
 def _repo_text(cwd: str, root: str | None) -> str:
@@ -241,6 +248,8 @@ def cmd_use(args: argparse.Namespace) -> int:
             )
     cwd = os.getcwd()
     if resolve.repo_root(cwd) is None:
+        if resolve.git_dir(cwd) is not None:
+            raise GitShiftError("there is no working tree here (a bare repository, or inside .git)")
         raise GitShiftError("not inside a git repository")
     entries = [("user.name", identity.user_name), ("user.email", identity.email)]
     if identity.ssh_key:
@@ -249,7 +258,8 @@ def cmd_use(args: argparse.Namespace) -> int:
     for key, value in entries:
         gitconfig.set_value(key, value, scope="local", cwd=cwd, replace_all=True)
 
-    eff = resolve.effective(cwd, store.list_identities())
+    identities = store.list_identities()
+    eff = resolve.effective(cwd, identities)
     if (eff.email or "").casefold() == identity.email.casefold():
         print(f'{OK} this repo now commits as {identity.email} ("{identity.name}")')
     else:
@@ -260,7 +270,7 @@ def cmd_use(args: argparse.Namespace) -> int:
         fix = _override_fix(eff)
         if fix:
             print(f"  fix: {fix}")
-    _print_ssh_warning(identity, eff)
+    _print_ssh_warning(identity, eff, identities)
     return 0
 
 
