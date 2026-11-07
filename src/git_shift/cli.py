@@ -7,7 +7,7 @@ import os
 import sys
 from collections.abc import Callable
 
-from . import __version__, gh, gitconfig, paths, resolve, store
+from . import __version__, gh, gitconfig, guard, paths, resolve, store
 from .errors import GitShiftError
 
 OK, WARN, ERR = "✓", "!", "✗"
@@ -293,12 +293,26 @@ def cmd_use(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_guard(args: argparse.Namespace) -> int:
+    if args.guard_command == "install":
+        previous = guard.install()
+        print(f"{OK} guard installed: commits and pushes with the wrong identity are blocked")
+        if previous:
+            print(f"  chained to your previous global hooks: {previous}")
+        print("  bypass once: git commit --no-verify   disable: git shift guard uninstall")
+        return 0
+    previous = guard.uninstall()
+    print(f"{OK} guard removed" + (f", core.hooksPath restored to {previous}" if previous else ""))
+    return 0
+
+
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "add": cmd_add,
     "list": cmd_list,
     "remove": cmd_remove,
     "status": cmd_status,
     "use": cmd_use,
+    "guard": cmd_guard,
 }
 
 
@@ -331,6 +345,11 @@ def build_parser() -> argparse.ArgumentParser:
     use = sub.add_parser("use", help="pin an identity on the current repository")
     use.add_argument("name", metavar="IDENTITY")
     use.add_argument("--here", action="store_true", help="write it to this repo's config")
+
+    guard_parser = sub.add_parser("guard", help="block commits made with the wrong identity")
+    guard_sub = guard_parser.add_subparsers(dest="guard_command", required=True, metavar="<action>")
+    guard_sub.add_parser("install", help="install the global hooks")
+    guard_sub.add_parser("uninstall", help="remove the global hooks")
     return parser
 
 
