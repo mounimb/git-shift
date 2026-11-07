@@ -54,7 +54,7 @@ A guard (global `pre-commit` and `pre-push` hooks) is added on top of approach 1
 | `git shift status` | Show which identity applies in the current directory, why, and the effective email, SSH key and `gh` account |
 | `git shift remove <name>` | Delete an identity and its include rule |
 | `git shift use <name> --here` | Pin an identity on the current repository only; the pin beats the folder and remote rules |
-| `git shift doctor` | Health checks (see Error handling) |
+| `git shift doctor [--fix]` | Health checks (see Error handling). `--fix` only rewrites `rules.gitconfig` from the identity files |
 | `git shift guard install` / `uninstall` | Install or remove the commit/push guard |
 
 Global flag: `--debug` prints tracebacks for unexpected errors.
@@ -252,6 +252,10 @@ machine.
 | Identity folder or SSH key missing | warning / error |
 | Invalid `gh` login | error + fix command |
 | Git older than 2.13 (no `includeIf`) | error with the minimum version |
+| `rules.gitconfig` differs from what the identity files would generate (hand edit, older version, folder resolving differently) | "rules.gitconfig is out of date" + fix `git shift doctor --fix` |
+
+`status` and the guard never rewrite `rules.gitconfig`: they only read configuration, and a
+hook must not change the global config during a commit.
 
 ### Safety
 
