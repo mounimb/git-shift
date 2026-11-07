@@ -296,7 +296,15 @@ def cmd_use(args: argparse.Namespace) -> int:
 def cmd_guard(args: argparse.Namespace) -> int:
     if args.guard_command == "install":
         installed = guard.install()
-        print(f"{OK} guard installed: commits and pushes with the wrong identity are blocked")
+        override = installed.overridden_by
+        if override is None:
+            print(f"{OK} guard installed: commits and pushes with the wrong identity are blocked")
+        else:
+            print(
+                f"{WARN} guard installed, but not active: git uses core.hooksPath "
+                f"{override.value} from {override.path}, which it reads after git-shift's"
+            )
+            print(f"  to make it active: remove core.hooksPath from {override.path}")
         if installed.chain_is_system:
             print(f"  chained to the system hooks: {installed.chain}")
         elif installed.chain:
@@ -304,12 +312,6 @@ def cmd_guard(args: argparse.Namespace) -> int:
         else:
             print("  chained to each repository's own hooks")
         print("  bypass once: git commit --no-verify   disable: git shift guard uninstall")
-        override = installed.overridden_by
-        if override is not None:
-            print(
-                f"{WARN} the guard is not active: git uses core.hooksPath {override.value} "
-                f"from {override.path}, which it reads after git-shift's"
-            )
         return 0
     previous = guard.uninstall()
     print(f"{OK} guard removed" + (f", core.hooksPath restored to {previous}" if previous else ""))

@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,10 +52,10 @@ STATE_PREVIOUS = "gitshift.previousHooksPath"
 _MARKER = "# git-shift guard ("  # starts the second line of every generated hook
 _PY_LINE = re.compile(r"^GIT_SHIFT_PY=(.+)$", re.MULTILINE)
 _FEED = '{ [ -z "$GIT_SHIFT_STDIN" ] || printf \'%s\\n\' "$GIT_SHIFT_STDIN"; } | '
-# First thing every hook runs. The case resets a value that is not a number, which would
-# make the arithmetic fail.
+# First thing every hook runs. The case resets a value that is not a plain decimal number
+# (with a leading 0, "08" reads as octal and fails): the arithmetic would stop the hook.
 _LOOP_GUARD = [
-    "case $GIT_SHIFT_DEPTH in ''|*[!0-9]*) GIT_SHIFT_DEPTH=0 ;; esac",
+    "case $GIT_SHIFT_DEPTH in ''|*[!0-9]*|0?*) GIT_SHIFT_DEPTH=0 ;; esac",
     "GIT_SHIFT_DEPTH=$((GIT_SHIFT_DEPTH + 1)); export GIT_SHIFT_DEPTH",
     f'if [ "$GIT_SHIFT_DEPTH" -gt {MAX_DEPTH} ]; then',
     "  printf '%s\\n' \"git-shift: warning: core.hooksPath loops back to git-shift, "
@@ -152,12 +153,42 @@ def _global_files() -> list[str]:
     return [paths.to_git_path(file) for file in reversed(paths.global_config_files())]
 
 
+# What tells git which repository it is in: a read without them finds none
+_REPOSITORY_ENV = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_PREFIX",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+)
+
+
+def _hooks_paths(*, scope: str | None = None, file: str | None = None) -> list[gitconfig.Origin]:
+    """Every core.hooksPath in a config file (or scope) and the files it includes, read
+    outside any repository. git checks [includeIf] gitdir and onbranch against the current
+    repository, so from inside a work repository a work-only hooksPath would pass for the
+    global one. Read from a new empty dir whose parent is a ceiling, those conditions are
+    false and plain [include] still applies. realpath: a Windows short name in the temp
+    path would not match the ceiling."""
+    neutral = os.path.realpath(tempfile.mkdtemp(prefix="git-shift-"))
+    env: dict[str, str | None] = dict.fromkeys(_REPOSITORY_ENV)
+    env["GIT_CEILING_DIRECTORIES"] = os.path.dirname(neutral)
+    try:
+        return gitconfig.get_all_with_origin(
+            "core.hooksPath", scope=scope, file=file, includes=True, cwd=neutral, env=env
+        )
+    finally:
+        shutil.rmtree(neutral, ignore_errors=True)
+
+
 def _global_entries() -> list[gitconfig.Origin]:
-    """Every global core.hooksPath, in git's read order, with the files they include. The
-    system config is read apart. [includeIf] conditions apply to the current directory."""
+    """Every global core.hooksPath, in git's read order, with the files they include, as
+    seen outside any repository. The system config is read apart."""
     entries: list[gitconfig.Origin] = []
     for file in _global_files():
-        entries += gitconfig.get_all_with_origin("core.hooksPath", file=file, includes=True)
+        entries += _hooks_paths(file=file)
     return entries
 
 
@@ -168,12 +199,12 @@ def _global_hooks_path() -> str | None:
 
 
 def _system_hooks_path() -> str | None:
-    """The system core.hooksPath git uses. `git config --system` reads it even under
-    GIT_CONFIG_NOSYSTEM, which git itself honours."""
+    """The system core.hooksPath git uses outside any repository. `git config --system`
+    reads it even under GIT_CONFIG_NOSYSTEM, which git itself honours."""
     nosystem = os.environ.get("GIT_CONFIG_NOSYSTEM", "").strip().lower()
     if nosystem not in ("", "0", "false", "no", "off"):
         return None
-    entries = gitconfig.get_all_with_origin("core.hooksPath", scope="system", includes=True)
+    entries = _hooks_paths(scope="system")
     return entries[-1].value if entries else None
 
 

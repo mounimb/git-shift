@@ -1,5 +1,6 @@
 import getpass
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -243,7 +244,9 @@ def test_install_warns_when_an_include_overrides_the_guard(home, tmp_path, capsy
     )
     assert main(["guard", "install"]) == 0
     out = capsys.readouterr().out
-    assert f"the guard is not active: git uses core.hooksPath {other}" in out
+    assert "are blocked" not in out
+    assert f"! guard installed, but not active: git uses core.hooksPath {other} from " in out
+    assert "to make it active: remove core.hooksPath from " in out
     assert "extra.gitconfig" in out
     assert not guard.is_installed()
     assert main(["guard", "uninstall"]) == 0  # still possible
@@ -251,14 +254,70 @@ def test_install_warns_when_an_include_overrides_the_guard(home, tmp_path, capsy
     assert effective_hooks_path(home) == other
 
 
-def test_a_previous_hooks_path_under_another_users_home_is_expanded(home):
-    user = getpass.getuser()
+def test_install_and_uninstall_ignore_an_include_if_matching_the_current_repo(
+    home, make_repo, monkeypatch, tmp_path, fake_python
+):
+    guard_ran = tmp_path / "guard-ran.txt"
+    fake_python(f"echo ran >> {shlex.quote(paths.to_git_path(guard_ran))}")
+    work_hooks = paths.to_git_path(tmp_path / "work hooks")
+    work_config = f"[core]\n\thooksPath = {work_hooks}\n"
+    (home / "work.gitconfig").write_text(work_config, encoding="utf-8")
+    user_config = (
+        "[core]\n\teditor = vi\n"
+        f'[includeIf "gitdir:{paths.to_git_path(home / "work")}/"]\n\tpath = work.gitconfig\n'
+    )
+    (home / ".gitconfig").write_text(user_config, encoding="utf-8")
+    work_repo = make_repo(home / "work" / "app")
+    assert effective_hooks_path(work_repo) == work_hooks  # git applies it in there
+    monkeypatch.chdir(work_repo)
+    installed = guard.install()
+    assert installed.chain is None
+    assert installed.overridden_by is None
+    assert gitconfig.get(guard.STATE_PREVIOUS, file=paths.state_file()) is None
+    # elsewhere the guard runs, then the repository's own hook
+    other = make_repo(home / "other")
+    write_script(other / ".git" / "hooks", "commit-msg", "echo ran > ran.txt")
+    commit(other)
+    assert guard_ran.read_text(encoding="utf-8") == "ran\n"
+    assert (other / "ran.txt").exists()
+    monkeypatch.chdir(tmp_path)  # outside any repository
+    assert guard.uninstall() is None
+    assert (home / ".gitconfig").read_text(encoding="utf-8") == user_config
+    assert (home / "work.gitconfig").read_text(encoding="utf-8") == work_config
+    assert effective_hooks_path(other) == ""
+
+
+def test_a_plain_include_is_still_followed(home, make_repo, tmp_path):
+    included = tmp_path / "included hooks"
+    write_script(included, "commit-msg", "echo included > ran.txt")
+    (home / "extra.gitconfig").write_text(
+        f"[core]\n\thooksPath = {paths.to_git_path(included)}\n", encoding="utf-8"
+    )
+    (home / ".gitconfig").write_text("[include]\n\tpath = extra.gitconfig\n", encoding="utf-8")
+    assert guard.install().chain == paths.to_git_path(included)  # from outside any repo
+    assert guard.is_installed()  # ours comes after the include
+    repo = make_repo(home / "repo")
+    commit(repo)
+    assert (repo / "ran.txt").read_text(encoding="utf-8") == "included\n"
+    guard.uninstall()
+    assert gitconfig.get_all("core.hooksPath", file=home / ".gitconfig") == []
+    assert effective_hooks_path(home) == paths.to_git_path(included)
+
+
+def test_a_previous_hooks_path_under_a_named_users_home_is_expanded(home):
+    if os.name == "nt":
+        user = os.environ["USERNAME"]
+        expected = paths.to_git_path(home / "hooks")  # their USERPROFILE, set by the fixture
+    else:
+        import pwd
+
+        user = getpass.getuser()
+        expected = paths.to_git_path(os.path.join(pwd.getpwnam(user).pw_dir, "hooks"))
     git(home, "config", "--global", "core.hooksPath", f"~{user}/hooks")
     guard.install()
-    expected = paths.to_git_path(os.path.expanduser(f"~{user}/hooks"))
-    assert "~" not in expected
     script = (paths.hooks_dir() / "pre-commit").read_text(encoding="utf-8")
-    assert f"GIT_SHIFT_CHAIN={shlex.quote(expected)}\n" in script
+    chain = shlex.split(re.search(r"^GIT_SHIFT_CHAIN=(.+)$", script, re.M).group(1))[0]
+    assert chain == expected
 
 
 # loops
@@ -298,11 +357,12 @@ def test_a_hooks_path_loop_stops_at_runtime(home, make_repo, monkeypatch, tmp_pa
     assert LOOP_WARNING in proc.stderr
 
 
-def test_a_depth_that_is_not_a_number_is_reset(home, make_repo, monkeypatch):
+@pytest.mark.parametrize("depth", ["x; exit 7", "08"])  # 08: invalid octal in sh arithmetic
+def test_a_depth_that_is_not_a_plain_number_is_reset(home, make_repo, monkeypatch, depth):
     repo = make_repo(home / "repo")
     write_script(repo / ".git" / "hooks", "commit-msg", "echo ran > ran.txt")
     guard.install()
-    monkeypatch.setenv("GIT_SHIFT_DEPTH", "x; exit 7")
+    monkeypatch.setenv("GIT_SHIFT_DEPTH", depth)
     proc = try_commit(repo)
     assert proc.returncode == 0, proc.stderr
     assert (repo / "ran.txt").exists()
@@ -434,6 +494,21 @@ def test_a_blocking_check_stops_the_commit_before_the_repository_hook(home, make
     write_script(repo / ".git" / "hooks", "pre-commit", "echo ran > ran.txt")
     guard.install()
     assert try_commit(repo).returncode != 0
+    assert not (repo / "ran.txt").exists()
+
+
+def test_a_blocking_check_stops_the_push_before_the_repository_hook(
+    home, make_repo, tmp_path, fake_python
+):
+    repo, remote = with_remote(make_repo, home, tmp_path)
+    git(repo, "push", "-q", "origin", "main")  # before the guard
+    pushed = git(remote, "rev-parse", "refs/heads/main")
+    commit(repo)
+    write_script(repo / ".git" / "hooks", "pre-push", "echo ran > ran.txt")
+    fake_python(f"exit {guard.BLOCK_EXIT}")
+    guard.install()
+    assert run(repo, "push", "-q", "origin", "main").returncode != 0
+    assert git(remote, "rev-parse", "refs/heads/main") == pushed
     assert not (repo / "ran.txt").exists()
 
 
