@@ -91,6 +91,23 @@ def get_with_origin(key: str, *, cwd=None) -> Origin | None:
     return Origin(kind=kind, path=path, value=value)
 
 
+def get_all_with_origin(
+    key: str, *, scope=None, file=None, includes: bool = False, cwd=None
+) -> list[Origin]:
+    """Every value of `key`, in the order git reads them, with the file each comes from.
+    includes: also read the files that [include] and [includeIf] pull in."""
+    flags = ["--includes"] if includes else []
+    out = _read([*_where(scope, file), *flags, "--show-origin", "-z", "--get-all", key], cwd)
+    if out is None:
+        return []
+    fields = out.split("\0")[:-1]
+    origins = []
+    for origin, value in zip(fields[::2], fields[1::2], strict=True):  # origin, value pairs
+        kind, _, origin_path = origin.partition(":")
+        origins.append(Origin(kind=kind, path=origin_path, value=value))
+    return origins
+
+
 def list_entries(*, scope=None, file=None, cwd=None) -> list[tuple[str, str]]:
     """All (key, value) pairs in file order; --file and --global do not follow includes.
 
@@ -111,13 +128,22 @@ def list_entries(*, scope=None, file=None, cwd=None) -> list[tuple[str, str]]:
 
 
 def set_value(
-    key: str, value: str, *, scope=None, file=None, cwd=None, replace_all: bool = False
+    key: str,
+    value: str,
+    *,
+    scope=None,
+    file=None,
+    cwd=None,
+    replace_all: bool = False,
+    value_regex: str | None = None,
 ) -> None:
-    """Set one value. git refuses (exit 5) when the key has several, unless replace_all."""
+    """Set one value. git refuses (exit 5) when the key has several, unless replace_all.
+    value_regex (POSIX extended): only replace the values it matches; none matching adds one."""
     if file is not None:
         Path(file).parent.mkdir(parents=True, exist_ok=True)
     flags = ["--replace-all"] if replace_all else []
-    run_git("config", *_where(scope, file), *flags, key, value, cwd=cwd)
+    pattern = [value_regex] if value_regex is not None else []
+    run_git("config", *_where(scope, file), *flags, key, value, *pattern, cwd=cwd)
 
 
 def add_value(key: str, value: str, *, scope=None, file=None, cwd=None) -> None:
@@ -126,11 +152,15 @@ def add_value(key: str, value: str, *, scope=None, file=None, cwd=None) -> None:
     run_git("config", *_where(scope, file), "--add", key, value, cwd=cwd)
 
 
-def unset(key: str, *, scope=None, file=None, cwd=None) -> None:
+def unset(key: str, *, scope=None, file=None, cwd=None, value_regex: str | None = None) -> None:
+    """Remove every value of key, or only those value_regex (POSIX extended) matches."""
     if file is not None and not Path(file).exists():
         return
-    proc = run_git("config", *_where(scope, file), "--unset-all", key, cwd=cwd, check=False)
-    if proc.returncode not in (0, 5):  # 5 = key was not set
+    pattern = [value_regex] if value_regex is not None else []
+    proc = run_git(
+        "config", *_where(scope, file), "--unset-all", key, *pattern, cwd=cwd, check=False
+    )
+    if proc.returncode not in (0, 5):  # 5 = key was not set, or no value matched
         raise GitShiftError(f"could not unset {key}: {proc.stderr.strip()}")
 
 
