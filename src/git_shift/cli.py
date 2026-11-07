@@ -381,6 +381,8 @@ def _configure_output() -> None:
 def main(argv: list[str] | None = None) -> int:
     _configure_output()
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["__hook"]:  # run by the generated hooks: no user command, not in -h
+        return guard.run_hook(argv[1] if len(argv) > 1 else "", argv[2:], sys.stdin)
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.command](args)

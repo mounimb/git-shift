@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 import pytest
-from helpers import git
+from helpers import git, run, write_script
 
 from git_shift import gitconfig, guard, paths, store
 from git_shift.cli import main
@@ -14,22 +14,6 @@ from git_shift.errors import GitShiftError
 
 IDENTITY = ("-c", "user.name=Test", "-c", "user.email=test@example.com")
 LOOP_WARNING = "git-shift: warning: core.hooksPath loops back to git-shift, hooks skipped"
-
-
-def write_script(directory, name, body):
-    """An sh script git can run: LF endings, and the exec bit that git requires on POSIX."""
-    directory.mkdir(parents=True, exist_ok=True)
-    script = directory / name
-    script.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8", newline="\n")
-    script.chmod(0o755)
-    return script
-
-
-def run(cwd, *args):
-    """git that may fail. The timeout stops a test if hooks loop forever."""
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=60
-    )
 
 
 def commit(repo, message="test"):

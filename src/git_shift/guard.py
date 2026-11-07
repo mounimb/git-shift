@@ -10,8 +10,9 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
-from . import gitconfig, paths, store
+from . import gitconfig, paths, resolve, store
 from .errors import GitShiftError
 
 GUARDED = ("pre-commit", "pre-push")
@@ -72,6 +73,8 @@ _GONE = (
     "remove the guard with: git config --global --unset core.hooksPath"
 )
 _ERE_SPECIAL = re.compile(r"[\\.^$|?*+()\[\]{}]")
+_IDENT_EMAIL = re.compile(r"<([^<>]*)>")  # the first <...>: names never contain < or >
+_SKIPPED_AFTER_ERROR = "git-shift: warning: guard skipped after an error:"
 
 
 def render_launcher(package_parent: str | None = None) -> str:
@@ -357,3 +360,69 @@ def installed_python() -> str | None:
         return None
     match = _PY_LINE.search(script.read_text(encoding="utf-8"))
     return shlex.split(match.group(1))[0] if match else None
+
+
+# the checks the hooks run
+
+
+def author_email(cwd: str | os.PathLike[str]) -> str | None:
+    """The author email git will record, or None when git has none. `git var` honours
+    GIT_AUTHOR_EMAIL, which git exports to pre-commit (the old author on --amend, the
+    value of --author), then -c options and the config."""
+    proc = gitconfig.run_git("var", "GIT_AUTHOR_IDENT", cwd=cwd, check=False)
+    match = _IDENT_EMAIL.search(proc.stdout) if proc.returncode == 0 else None
+    return match.group(1) if match else None
+
+
+def check_pre_commit(cwd: str | os.PathLike[str]) -> int:
+    """BLOCK_EXIT, with the reason on stderr, when the author email is not the one of the
+    identity the repository expects (its pin, its folder, then the GitHub owner of origin)."""
+    identities = store.list_identities()
+    if not identities:
+        return 0  # nothing can match: skip the git calls of expected_for_repo
+    found = resolve.expected_for_repo(cwd, identities)
+    if found is None:
+        return 0
+    identity, reason = found
+    actual = author_email(cwd)
+    if resolve.same_email(actual, identity.email):
+        return 0
+    owner = f" ({identity.gh})" if identity.gh else ""
+    lines = [  # a literal ✗: importing cli for ERR would be circular
+        f'✗ git-shift: this repo belongs to "{identity.name}"{owner}, '
+        f"but you are committing as {actual or '(no email)'}",
+        f"  expected: {identity.email}  (matched by {reason})",
+        f"  fix:      git shift use {identity.name} --here",
+        "  why:      git shift status shows where the wrong email comes from",
+        "  amending? add --reset-author; using --author? drop it",
+        "  bypass:   git commit --no-verify",
+    ]
+    print("\n".join(lines), file=sys.stderr)
+    return BLOCK_EXIT
+
+
+def check_pre_push(cwd: str | os.PathLike[str], args: list[str], stdin_text: str) -> int:
+    return 0  # implemented in Task 15
+
+
+def _error_lines(exc: Exception) -> list[str]:
+    """The error, indented line by line: what git says when it refuses can span several
+    lines. Anything but a GitShiftError is a bug, so its type is shown for the report."""
+    message = str(exc).strip()
+    if not isinstance(exc, GitShiftError) or not message:
+        message = f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+    return [f"  {line}" if line.strip() else "" for line in message.splitlines()]
+
+
+def run_hook(hook: str, args: list[str], stdin: TextIO) -> int:
+    """What the generated hooks run: BLOCK_EXIT blocks, anything else lets git go on.
+    Fails open: an error in git-shift must never block every commit on the machine."""
+    try:
+        if hook == "pre-commit":
+            return check_pre_commit(os.getcwd())
+        if hook == "pre-push":
+            return check_pre_push(os.getcwd(), args, stdin.read())
+        return 0
+    except Exception as exc:
+        print("\n".join([_SKIPPED_AFTER_ERROR, *_error_lines(exc)]), file=sys.stderr)
+        return 0

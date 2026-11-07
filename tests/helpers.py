@@ -31,6 +31,22 @@ def git(cwd: Path, *args: str, env: dict[str, str] | None = None) -> str:
     return proc.stdout.strip()
 
 
+def run(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """git that may fail. The timeout stops a test if hooks loop forever."""
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=60
+    )
+
+
+def write_script(directory: Path, name: str, body: str) -> Path:
+    """An sh script git can run: LF endings, and the exec bit that git requires on POSIX."""
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / name
+    script.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8", newline="\n")
+    script.chmod(0o755)
+    return script
+
+
 def make_git_refuse(repo: Path) -> None:
     """Make every git command that needs a repository fail in repo, on any platform."""
     git(repo, "config", "core.repositoryformatversion", "1")
