@@ -236,7 +236,8 @@ Blocked output:
   expected: jane@example.com  (matched by folder /home/jane/code/perso/)
   fix:      git shift use perso --here
   why:      git shift status shows where the wrong email comes from
-  amending? add --reset-author; using --author? drop it
+  amend:    your own commit: add --reset-author; someone else's: --no-verify
+  --author: drop it
   bypass:   git commit --no-verify
 ```
 
