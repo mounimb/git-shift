@@ -366,9 +366,16 @@ def installed_python() -> str | None:
 
 
 def author_email(cwd: str | os.PathLike[str]) -> str | None:
-    """The author email git will record, or None when git has none. `git var` honours
-    GIT_AUTHOR_EMAIL, which git exports to pre-commit (the old author on --amend, the
-    value of --author), then -c options and the config."""
+    """The author email git will record, or None when git has none.
+
+    Inside `git commit`, determine_author_info exports the final author email, cleaned as
+    git records it, as GIT_AUTHOR_EMAIL before pre-commit runs: the old author on --amend,
+    the value of --author, else the configured one. Reading it saves a git process.
+    Elsewhere (`git hook run`, a direct call) `git var` works it out from GIT_AUTHOR_*,
+    -c options and the config."""
+    exported = os.environ.get("GIT_AUTHOR_EMAIL")
+    if exported:
+        return exported
     proc = gitconfig.run_git("var", "GIT_AUTHOR_IDENT", cwd=cwd, check=False)
     match = _IDENT_EMAIL.search(proc.stdout) if proc.returncode == 0 else None
     return match.group(1) if match else None

@@ -142,6 +142,13 @@ def test_the_author_option_is_checked(repo):
     assert "using --author? drop it" in proc.stderr
 
 
+def test_without_the_exported_email_git_var_still_finds_the_author(repo, monkeypatch, capsys):
+    monkeypatch.delenv("GIT_AUTHOR_EMAIL", raising=False)  # `git hook run`, or a direct call
+    git(repo, "config", "user.email", WRONG)
+    assert guard.check_pre_commit(repo) == guard.BLOCK_EXIT
+    assert f"you are committing as {WRONG}" in capsys.readouterr().err
+
+
 # bypasses
 
 
