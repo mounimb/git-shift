@@ -232,16 +232,31 @@ directory.
 Blocked output:
 
 ```
-✗ git-shift: this repo belongs to "perso" (mounimb), but you're committing as pro@company.com
-  fix:    git shift use perso --here
-  bypass: git commit --no-verify
+✗ git-shift: this repo belongs to "perso" (jane), but you are committing as jane@company.com
+  expected: jane@example.com  (matched by folder /home/jane/code/perso/)
+  fix:      git shift use perso --here
+  why:      git shift status shows where the wrong email comes from
+  amending? add --reset-author; using --author? drop it
+  bypass:   git commit --no-verify
 ```
+
+`use --here` fixes a wrong `user.email`, but not `GIT_AUTHOR_EMAIL`,
+`author.email`, `--author` or the old author kept by `--amend`. `status`
+names the cause; the hook alone cannot tell them apart.
 
 ### Failure policy
 
-If `git-shift` itself fails unexpectedly inside a hook, the hook prints a
-warning and exits 0. A bug in the tool must never block every commit on the
-machine.
+If `git-shift` itself fails inside a hook (a bug, a malformed identity file,
+git refusing to work in the repository), the hook prints a warning and exits
+0. A bug in the tool must never block every commit on the machine:
+
+```
+git-shift: warning: guard skipped after an error:
+  <the error, one indented line per line>
+```
+
+Only exit code 3 blocks. A missing Python or launcher skips the check with a
+warning, and the repository's own hooks still run.
 
 ## `gh` integration (v0.1, read-only)
 
