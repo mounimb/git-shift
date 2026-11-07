@@ -2,11 +2,12 @@
 and the real check."""
 
 import io
+import subprocess
 
 import pytest
 from helpers import git, run, write_script
 
-from git_shift import guard, store
+from git_shift import gitconfig, guard, store
 from git_shift.cli import main
 from git_shift.errors import GitShiftError
 
@@ -67,6 +68,7 @@ def test_a_local_user_email_is_blocked_and_the_fix_works(repo, monkeypatch):
     proc = commit(repo)
     assert proc.returncode != 0
     assert head(repo) is None
+    assert proc.stderr.startswith("✗ git-shift: ")  # UTF-8 on a pipe: __hook runs after setup
     assert f'this repo belongs to "perso", but you are committing as {WRONG}' in proc.stderr
     assert f"expected: {EMAIL}  (matched by folder {store.load('perso').folder})" in proc.stderr
     assert "git shift use perso --here" in proc.stderr
@@ -127,7 +129,7 @@ def test_amend_keeps_the_wrong_author_until_reset_author(repo):
     proc = commit(repo, "--amend")  # the configured email is right, the author of HEAD is not
     assert proc.returncode != 0
     assert f"you are committing as {WRONG}" in proc.stderr
-    assert "amending? add --reset-author" in proc.stderr
+    assert "amend:    your own commit: add --reset-author" in proc.stderr
     assert head(repo, "%H") == before
     proc = commit(repo, "--amend", "--reset-author")
     assert proc.returncode == 0, proc.stderr
@@ -139,7 +141,7 @@ def test_the_author_option_is_checked(repo):
     assert proc.returncode != 0
     assert head(repo) is None
     assert "you are committing as other@example.com" in proc.stderr
-    assert "using --author? drop it" in proc.stderr
+    assert "  --author: drop it\n" in proc.stderr
 
 
 def test_without_the_exported_email_git_var_still_finds_the_author(repo, monkeypatch, capsys):
@@ -147,6 +149,26 @@ def test_without_the_exported_email_git_var_still_finds_the_author(repo, monkeyp
     git(repo, "config", "user.email", WRONG)
     assert guard.check_pre_commit(repo) == guard.BLOCK_EXIT
     assert f"you are committing as {WRONG}" in capsys.readouterr().err
+
+
+def test_a_failing_git_var_fails_open(home, make_repo, monkeypatch, capsys):
+    add(home, "perso", EMAIL, "code", gh="jane")
+    repo = make_repo(home / "elsewhere" / "x", remote="https://github.com/jane/x.git")
+    git(repo, "config", "user.useConfigOnly", "true")  # and no email anywhere: git var fails
+    monkeypatch.delenv("GIT_AUTHOR_EMAIL", raising=False)
+    monkeypatch.chdir(repo)
+    assert guard.run_hook("pre-commit", [], io.StringIO()) == 0
+    assert capsys.readouterr().err.startswith(f"{SKIPPED}\n  `git var GIT_AUTHOR_IDENT` failed: ")
+
+
+def test_git_var_output_without_an_email_is_an_error(repo, monkeypatch):
+    def no_email(*args, **kwargs):
+        return subprocess.CompletedProcess(["git", *args], 0, stdout="Me 1700000000 +0000\n")
+
+    monkeypatch.delenv("GIT_AUTHOR_EMAIL", raising=False)
+    monkeypatch.setattr(gitconfig, "run_git", no_email)
+    with pytest.raises(GitShiftError, match="no email in what git var GIT_AUTHOR_IDENT printed"):
+        guard.author_email(repo)
 
 
 # bypasses

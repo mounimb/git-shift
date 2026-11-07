@@ -365,8 +365,9 @@ def installed_python() -> str | None:
 # the checks the hooks run
 
 
-def author_email(cwd: str | os.PathLike[str]) -> str | None:
-    """The author email git will record, or None when git has none.
+def author_email(cwd: str | os.PathLike[str]) -> str:
+    """The author email git will record: "" when it is empty (--author="Name <>"). Raises
+    GitShiftError when git cannot tell, so the hook fails open instead of blocking.
 
     Inside `git commit`, determine_author_info exports the final author email, cleaned as
     git records it, as GIT_AUTHOR_EMAIL before pre-commit runs: the old author on --amend,
@@ -376,9 +377,11 @@ def author_email(cwd: str | os.PathLike[str]) -> str | None:
     exported = os.environ.get("GIT_AUTHOR_EMAIL")
     if exported:
         return exported
-    proc = gitconfig.run_git("var", "GIT_AUTHOR_IDENT", cwd=cwd, check=False)
-    match = _IDENT_EMAIL.search(proc.stdout) if proc.returncode == 0 else None
-    return match.group(1) if match else None
+    proc = gitconfig.run_git("var", "GIT_AUTHOR_IDENT", cwd=cwd)  # raises when git fails
+    match = _IDENT_EMAIL.search(proc.stdout)
+    if match is None:  # git writes <> even around an empty email
+        raise GitShiftError(f"no email in what git var GIT_AUTHOR_IDENT printed: {proc.stdout}")
+    return match.group(1)
 
 
 def check_pre_commit(cwd: str | os.PathLike[str]) -> int:
@@ -401,7 +404,8 @@ def check_pre_commit(cwd: str | os.PathLike[str]) -> int:
         f"  expected: {identity.email}  (matched by {reason})",
         f"  fix:      git shift use {identity.name} --here",
         "  why:      git shift status shows where the wrong email comes from",
-        "  amending? add --reset-author; using --author? drop it",
+        "  amend:    your own commit: add --reset-author; someone else's: --no-verify",
+        "  --author: drop it",
         "  bypass:   git commit --no-verify",
     ]
     print("\n".join(lines), file=sys.stderr)
