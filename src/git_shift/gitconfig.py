@@ -23,17 +23,23 @@ def run_git(
     *args: str,
     cwd: str | Path | None = None,
     check: bool = True,
-    env: dict[str, str] | None = None,
+    env: dict[str, str | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run git. env: variables to set for this call, on top of the current environment."""
+    """Run git. env: variables to set for this call, on top of the current environment;
+    None removes one."""
     exe = paths.find_executable("git")
     if exe is None:
         raise GitShiftError("git is not installed or not on PATH")
+    child_env = None
+    if env:
+        child_env = {**os.environ, **{k: v for k, v in env.items() if v is not None}}
+        for name in (k for k, v in env.items() if v is None):
+            child_env.pop(name, None)
     try:
         proc = subprocess.run(
             [exe, *args],
             cwd=cwd,
-            env={**os.environ, **env} if env else None,
+            env=child_env,
             stdin=subprocess.DEVNULL,  # inside hooks, stdin belongs to git (pre-push refs)
             capture_output=True,
             text=True,
@@ -55,12 +61,12 @@ def _where(scope: str | None, file: str | Path | None) -> list[str]:
     return []
 
 
-def _read(args: list[str], cwd) -> str | None:
+def _read(args: list[str], cwd, env=None) -> str | None:
     """stdout of a `git config` read; None when the key is missing (exit code 1).
 
     git also exits 1 for a malformed key name, so keys must be constants, never user input.
     """
-    proc = run_git("config", *args, cwd=cwd, check=False)
+    proc = run_git("config", *args, cwd=cwd, check=False, env=env)
     if proc.returncode == 1:
         return None
     if proc.returncode != 0:
@@ -68,13 +74,13 @@ def _read(args: list[str], cwd) -> str | None:
     return proc.stdout
 
 
-def get(key: str, *, scope=None, file=None, cwd=None) -> str | None:
-    out = _read([*_where(scope, file), "-z", "--get", key], cwd)
+def get(key: str, *, scope=None, file=None, cwd=None, env=None) -> str | None:
+    out = _read([*_where(scope, file), "-z", "--get", key], cwd, env)
     return None if out is None else out.split("\0")[0]
 
 
-def get_all(key: str, *, scope=None, file=None, cwd=None) -> list[str]:
-    out = _read([*_where(scope, file), "-z", "--get-all", key], cwd)
+def get_all(key: str, *, scope=None, file=None, cwd=None, env=None) -> list[str]:
+    out = _read([*_where(scope, file), "-z", "--get-all", key], cwd, env)
     return [] if out is None else out.split("\0")[:-1]
 
 
@@ -92,12 +98,14 @@ def get_with_origin(key: str, *, cwd=None) -> Origin | None:
 
 
 def get_all_with_origin(
-    key: str, *, scope=None, file=None, includes: bool = False, cwd=None
+    key: str, *, scope=None, file=None, includes: bool = False, cwd=None, env=None
 ) -> list[Origin]:
     """Every value of `key`, in the order git reads them, with the file each comes from.
-    includes: also read the files that [include] and [includeIf] pull in."""
+    includes: also read the files that [include] and [includeIf] pull in; git checks
+    [includeIf] conditions against the repository at cwd."""
     flags = ["--includes"] if includes else []
-    out = _read([*_where(scope, file), *flags, "--show-origin", "-z", "--get-all", key], cwd)
+    args = [*_where(scope, file), *flags, "--show-origin", "-z", "--get-all", key]
+    out = _read(args, cwd, env)
     if out is None:
         return []
     fields = out.split("\0")[:-1]
