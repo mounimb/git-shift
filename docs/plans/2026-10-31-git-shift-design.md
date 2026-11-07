@@ -189,12 +189,30 @@ directory.
   it exists and is executable.
 - Because the global setting disables every local hook type, pass-through
   scripts (chain only, no check) are installed for the other client hooks
-  (`commit-msg`, `prepare-commit-msg`, `post-checkout`, `post-merge`, ...).
-  `reference-transaction` and `post-index-change` are left out: they run on
-  almost every git command and a shell start per call would slow git down.
+  (`commit-msg`, `prepare-commit-msg`, `post-checkout`, `post-merge`, ...) and
+  for `pre-receive` and `post-receive`, so pushes into a local repository still
+  run its hooks. Left out:
+  - `reference-transaction` and `post-index-change` run on almost every git
+    command, and `update` once per pushed ref: a shell start per call would slow
+    git down;
+  - `post-update` gets every pushed ref on its command line;
+  - `push-to-checkout` would replace the built-in `updateInstead` worktree
+    update just by existing;
+  - `proc-receive` and the git-p4 hooks serve review servers and the Perforce
+    bridge only.
+- Every script first counts how deeply git-shift hooks are nested
+  (`GIT_SHIFT_DEPTH`) and skips its work past 5, so a `core.hooksPath` that
+  loops back to the guard cannot hang git. `install` also refuses to chain to a
+  directory that holds git-shift hooks.
 - If a global `core.hooksPath` already exists, its value is saved in
   `state.gitconfig` and hooks chain to that directory instead. `uninstall`
-  restores it.
+  restores it in one write and removes only git-shift's own value. Without a
+  global value, hooks chain to the system `core.hooksPath`, which is not saved
+  because removing the guard brings it back by itself.
+- `core.hooksPath` is read with `[include]` files, from a directory outside any
+  repository, so an `[includeIf]` that applies only to some folders never
+  passes for the global value. `install` warns when an include read after
+  git-shift's value overrides it.
 - Hooks call `<python> -I _git_shift_launch.py`. The interpreter path is
   recorded at install time, so hooks work when `git-shift` is not on `PATH`
   (for example inside a virtualenv). Isolated mode (`-I`) keeps the repository
