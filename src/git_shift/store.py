@@ -65,7 +65,7 @@ def ssh_command(key_path: str) -> str:
     return f"ssh -i {shlex.quote(key_path)} -o IdentitiesOnly=yes"
 
 
-def _replace(src: Path, dst: Path) -> None:
+def replace_file(src: Path, dst: Path) -> None:
     """os.replace, retried briefly on Windows, where a git process reading dst blocks it."""
     for attempt in range(20):
         try:
@@ -77,7 +77,7 @@ def _replace(src: Path, dst: Path) -> None:
             time.sleep(0.05)
 
 
-def _temp_beside(path: Path) -> Path:
+def temp_beside(path: Path) -> Path:
     """A new empty file next to path, unique to this run, so concurrent runs never share it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
@@ -89,7 +89,7 @@ def save(identity: Identity) -> None:
     """Write the identity file in one step, so a failure never leaves a partial file."""
     validate_name(identity.name)
     path = identity.path
-    tmp = _temp_beside(path)
+    tmp = temp_beside(path)
     entries = [("user.name", identity.user_name), ("user.email", identity.email)]
     if identity.ssh_key:
         entries.append(("core.sshCommand", ssh_command(identity.ssh_key)))
@@ -101,7 +101,7 @@ def save(identity: Identity) -> None:
     try:
         for key, value in entries:
             gitconfig.set_value(key, value, file=tmp)
-        _replace(tmp, path)
+        replace_file(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -150,7 +150,7 @@ def list_identities() -> list[Identity]:
 def write_rules(identities: list[Identity]) -> None:
     """Regenerate rules.gitconfig. Deeper folders come last so they win."""
     rules = paths.rules_file()
-    tmp = _temp_beside(rules)
+    tmp = temp_beside(rules)
     try:
         tmp.write_text(
             "# Managed by git-shift. Do not edit by hand.\n", encoding="utf-8", newline="\n"
@@ -162,7 +162,7 @@ def write_rules(identities: list[Identity]) -> None:
                 paths.to_git_path(identity.path),
                 file=tmp,
             )
-        _replace(tmp, rules)
+        replace_file(tmp, rules)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -183,9 +183,9 @@ def backup_global_config() -> Path | None:
         return None
     backups.mkdir(parents=True, exist_ok=True)
     target = backups / f"gitconfig-{time.strftime('%Y%m%d-%H%M%S')}"
-    tmp = _temp_beside(target)
+    tmp = temp_beside(target)
     shutil.copy2(source, tmp)
-    _replace(tmp, target)
+    replace_file(tmp, target)
     return target
 
 
