@@ -75,6 +75,11 @@ _GONE = (
 _ERE_SPECIAL = re.compile(r"[\\.^$|?*+()\[\]{}]")
 _IDENT_EMAIL = re.compile(r"<([^<>]*)>")  # the first <...>: names never contain < or >
 _SKIPPED_AFTER_ERROR = "git-shift: warning: guard skipped after an error:"
+_HEX = re.compile(r"[0-9a-f]+")  # used with fullmatch
+# one line per commit: full sha, short sha, raw author email, short parents
+_LOG_FORMAT = "%H%x00%h%x00%ae%x00%p"
+_REAUTHOR = "git commit --amend --reset-author --no-edit"
+_SHOWN = 10  # wrong commits listed before "… and N more"
 
 
 def render_launcher(package_parent: str | None = None) -> str:
@@ -412,8 +417,126 @@ def check_pre_commit(cwd: str | os.PathLike[str]) -> int:
     return BLOCK_EXIT
 
 
+@dataclass(frozen=True)
+class PushedCommit:
+    sha: str
+    short: str
+    email: str  # raw, as recorded: no mailmap
+    parent: str | None  # short sha of the first parent; None for a root commit
+
+
+def _is_zero(sha: str) -> bool:
+    return not sha.strip("0")
+
+
+def _push_lines(stdin_text: str) -> list[tuple[str, str, str]]:
+    """(local ref, local sha, remote sha) for each ref git is about to push."""
+    pushes = []
+    # not splitlines(), which also splits at characters a ref name may hold (U+0085, U+2028)
+    for line in stdin_text.split("\n"):
+        line = line.rstrip("\r")
+        if not line:
+            continue
+        parts = line.split(" ")  # ref names never contain a space
+        if len(parts) != 4 or not all(_HEX.fullmatch(parts[i]) for i in (1, 3)):
+            raise GitShiftError(f"unexpected pre-push input: {line!r}")
+        local_ref, local_sha, _remote_ref, remote_sha = parts
+        pushes.append((local_ref, local_sha, remote_sha))
+    return pushes
+
+
+def _new_commits(
+    cwd: str | os.PathLike[str], local_sha: str, remote_sha: str
+) -> list[PushedCommit]:
+    """The commits of local_sha that neither remote_sha nor any remote-tracking branch has,
+    children before parents, so the tip comes first. The shas are hex: never options."""
+
+    def log(*excluded: str):
+        return gitconfig.run_git(
+            "log",
+            "--no-show-signature",
+            "--topo-order",
+            f"--format={_LOG_FORMAT}",
+            local_sha,
+            "--not",
+            *excluded,
+            "--remotes",
+            cwd=cwd,
+            check=False,
+        )
+
+    proc = log() if _is_zero(remote_sha) else log(remote_sha)
+    if proc.returncode != 0 and not _is_zero(remote_sha):
+        proc = log()  # remote_sha is unknown here: pushed from elsewhere, never fetched
+    if proc.returncode != 0:
+        raise GitShiftError(f"git log failed: {proc.stderr.strip()}")
+    commits = []
+    for row in proc.stdout.split("\n"):
+        if not row:
+            continue
+        fields = row.split("\0")
+        if len(fields) != 4:
+            raise GitShiftError(f"unexpected git log output: {row!r}")
+        sha, short, email, parents = fields
+        commits.append(PushedCommit(sha, short, email, parents.split(" ")[0] or None))
+    return commits
+
+
+def _reauthor_hint(branch: str, wrong: list[PushedCommit], tip: PushedCommit) -> list[str]:
+    """How to re-author the wrong commits of one pushed branch."""
+    if wrong == [tip]:
+        return [f"  then:     on {branch}: {_REAUTHOR}"]
+    base = wrong[-1].parent  # of the oldest: children come before parents
+    after = f"after {base}" if base else f"of {branch}"
+    return [
+        f'  then:     on {branch}: git rebase -r --exec "{_REAUTHOR}" {base or "--root"}',
+        f"            this re-authors every commit {after}",
+    ]
+
+
 def check_pre_push(cwd: str | os.PathLike[str], args: list[str], stdin_text: str) -> int:
-    return 0  # implemented in Task 15
+    """BLOCK_EXIT, with the reason on stderr, when a commit this push publishes for the first
+    time is not authored by the identity the repository expects (its pin, its folder, then
+    the GitHub owner of the push URL). Commits on any remote-tracking branch are already
+    published: someone else's, fetched and merged, never count."""
+    identities = store.list_identities()
+    if not identities:
+        return 0  # nothing can match: skip every git call
+    push_url = args[1] if len(args) > 1 else None
+    found = resolve.expected_for_repo(cwd, identities, remote_url=push_url or None)
+    if found is None:
+        return 0
+    identity, reason = found
+    seen: set[str] = set()
+    wrong: list[PushedCommit] = []
+    hint: list[str] = []
+    for local_ref, local_sha, remote_sha in _push_lines(stdin_text):
+        if _is_zero(local_sha):
+            continue  # a deletion publishes nothing
+        listed = _new_commits(cwd, local_sha, remote_sha)
+        new = [commit for commit in listed if commit.sha not in seen]
+        seen.update(commit.sha for commit in new)
+        bad = [c for c in new if not resolve.same_email(c.email, identity.email)]
+        if bad and not hint:  # one hint, for the first ref with wrong commits
+            hint = _reauthor_hint(local_ref.removeprefix("refs/heads/"), bad, listed[0])
+        wrong += bad
+    if not wrong:
+        return 0
+    count = "1 commit to push is" if len(wrong) == 1 else f"{len(wrong)} commits to push are"
+    lines = [  # a literal ✗: importing cli for ERR would be circular
+        f'✗ git-shift: {count} not authored by "{identity.name}" <{identity.email}> '
+        f"(matched by {reason})",
+        *(f"  {c.short}  {c.email or '(no email)'}" for c in wrong[:_SHOWN]),
+    ]
+    if len(wrong) > _SHOWN:
+        lines.append(f"  … and {len(wrong) - _SHOWN} more")
+    lines += [
+        f"  fix:      git shift use {identity.name} --here  (why it is wrong: git shift status)",
+        *hint,
+        "  bypass:   pushing someone else's commits? git push --no-verify",
+    ]
+    print("\n".join(lines), file=sys.stderr)
+    return BLOCK_EXIT
 
 
 def _error_lines(exc: Exception) -> list[str]:
@@ -425,6 +548,15 @@ def _error_lines(exc: Exception) -> list[str]:
     return [f"  {line}" if line.strip() else "" for line in message.splitlines()]
 
 
+def _read_input(stream: TextIO) -> str:
+    """All of stream as UTF-8, like git's ref names. Never the locale: cp1252 garbles some
+    names and fails on others. A stream without bytes underneath (a test's) is read as is."""
+    buffer = getattr(stream, "buffer", None)
+    if buffer is None:
+        return stream.read()
+    return buffer.read().decode("utf-8", errors="replace")
+
+
 def run_hook(hook: str, args: list[str], stdin: TextIO) -> int:
     """What the generated hooks run: BLOCK_EXIT blocks, anything else lets git go on.
     Fails open: an error in git-shift must never block every commit on the machine."""
@@ -432,7 +564,7 @@ def run_hook(hook: str, args: list[str], stdin: TextIO) -> int:
         if hook == "pre-commit":
             return check_pre_commit(os.getcwd())
         if hook == "pre-push":
-            return check_pre_push(os.getcwd(), args, stdin.read())
+            return check_pre_push(os.getcwd(), args, _read_input(stdin))
         return 0
     except Exception as exc:
         print("\n".join([_SKIPPED_AFTER_ERROR, *_error_lines(exc)]), file=sys.stderr)
