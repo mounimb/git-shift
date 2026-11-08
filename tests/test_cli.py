@@ -60,6 +60,17 @@ def test_list_aligns_its_columns(home, capsys):
     ]
 
 
+def test_list_shows_a_hand_edited_email_cleaned(home, capsys):
+    args = ["add", "perso", "--email", "jane@example.com", "--name", "Jane"]
+    assert main([*args, "--folder", str(home / "code")]) == 0
+    path = store.identity_path("perso")
+    git(home, "config", "--file", str(path), "user.email", "<jane@example.com>")  # hand-edited
+    capsys.readouterr()
+    assert main(["list"]) == 0
+    folder = paths.to_folder_rule(home / "code")
+    assert capsys.readouterr().out == f"perso  jane@example.com  {folder}\n"
+
+
 def test_list_empty(home, capsys):
     assert main(["list"]) == 0
     assert "no identities yet" in capsys.readouterr().out

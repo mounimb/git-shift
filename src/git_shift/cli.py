@@ -36,7 +36,10 @@ def cmd_list(args: argparse.Namespace) -> int:
         print('  git shift add <identity> --email <email> --name "<your name>" --folder <dir>')
         return 0
     # hand-edited file without a usable folder: see doctor
-    rows = [(i.name, i.email, i.folder or "(no usable folder)", i.gh) for i in identities]
+    rows = [
+        (i.name, resolve.clean_email(i.email), i.folder or "(no usable folder)", i.gh)
+        for i in identities
+    ]
     name_width, email_width, folder_width = (max(len(row[n]) for row in rows) for n in range(3))
     for name, email, folder, login in rows:
         line = f"{name:<{name_width}}  {email:<{email_width}}  "
