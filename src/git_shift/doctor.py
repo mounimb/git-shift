@@ -229,11 +229,12 @@ def _check_identity(identity: store.Identity) -> list[Finding]:
         )
     key = identity.ssh_key
     if key and not Path(paths.expand(key)).is_file():
+        # expanded: ssh-keygen gets no ~ inside double quotes (a hand-edited ~/...)
         findings.append(
             Finding(
                 ERROR,
                 f'the SSH key of "{name}" is missing: {key}',
-                f'ssh-keygen -t ed25519 -f "{key}"',
+                f'ssh-keygen -t ed25519 -f "{paths.to_git_path(key)}"',
             )
         )
     return findings

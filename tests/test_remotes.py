@@ -63,7 +63,7 @@ def test_ssh_alias_host_is_kept_verbatim():
         ("file:///srv/app.git", False),
         ("/srv/app.git", False),
         ("C:/repos/app", False),
-        ("C:\repos\app", False),
+        (r"C:\repos\app", False),
         ("../app", False),
         ("", False),
     ],

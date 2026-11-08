@@ -250,6 +250,16 @@ def test_a_missing_ssh_key_is_an_error_with_the_keygen_fix(home):
     assert none(doctor.run(str(home)), "SSH key")
 
 
+def test_the_keygen_fix_expands_a_hand_edited_key_path(home):
+    add(home, ssh_key=str(home / ".ssh" / "id_perso"))
+    path = store.identity_path("perso")
+    git(home, "config", "--file", str(path), "gitshift.sshKey", "~/.ssh/id_hand")
+    finding = only(doctor.run(str(home)), "SSH key")
+    assert finding.level == doctor.ERROR
+    key = paths.to_git_path(home / ".ssh" / "id_hand")
+    assert finding.fix == f'ssh-keygen -t ed25519 -f "{key}"'
+
+
 def test_a_nested_identity_inheriting_an_ssh_key_is_a_warning(home):
     key = make_key(home)
     add(home, "perso", "code", ssh_key=str(key))
