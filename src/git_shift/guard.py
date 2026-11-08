@@ -448,30 +448,29 @@ def _push_lines(stdin_text: str) -> list[tuple[str, str, str]]:
 
 
 def _new_commits(
-    cwd: str | os.PathLike[str], local_sha: str, remote_sha: str
-) -> list[PushedCommit]:
-    """The commits of local_sha that neither remote_sha nor any remote-tracking branch has,
-    children before parents, so the tip comes first. The shas are hex: never options."""
-
-    def log(*excluded: str):
-        return gitconfig.run_git(
-            "log",
-            "--no-show-signature",
-            "--topo-order",
-            f"--format={_LOG_FORMAT}",
-            local_sha,
-            "--not",
-            *excluded,
-            "--remotes",
-            cwd=cwd,
-            check=False,
-        )
-
-    proc = log() if _is_zero(remote_sha) else log(remote_sha)
-    if proc.returncode != 0 and not _is_zero(remote_sha):
-        proc = log()  # remote_sha is unknown here: pushed from elsewhere, never fetched
+    cwd: str | os.PathLike[str], tips: list[str], published: list[str], *, check: bool = False
+) -> list[PushedCommit] | None:
+    """The commits of tips that neither published nor any remote-tracking branch has,
+    children before parents, so a single tip comes first. None when git fails (likely a
+    published sha unknown here), or GitShiftError with check. The shas go through stdin:
+    a few thousand refs would overflow a Windows command line. They are hex: never options."""
+    revs = "".join(f"{sha}\n" for sha in tips) + "".join(f"^{sha}\n" for sha in published)
+    proc = gitconfig.run_git(
+        "log",
+        "--no-show-signature",
+        "--topo-order",
+        f"--format={_LOG_FORMAT}",
+        "--stdin",
+        "--not",  # for --remotes only: the command line never negates what stdin gives
+        "--remotes",
+        cwd=cwd,
+        check=False,
+        input=revs,
+    )
     if proc.returncode != 0:
-        raise GitShiftError(f"git log failed: {proc.stderr.strip()}")
+        if check:
+            raise GitShiftError(f"git log failed: {proc.stderr.strip()}")
+        return None
     commits = []
     for row in proc.stdout.split("\n"):
         if not row:
@@ -546,13 +545,25 @@ def check_pre_push(cwd: str | os.PathLike[str], args: list[str], stdin_text: str
     if found is None:
         return 0
     identity, reason = found
+    lines = _push_lines(stdin_text)
+    pushes = [line for line in lines if not _is_zero(line[1])]  # deletions publish nothing
+    published = [remote for _, _, remote in lines if not _is_zero(remote)]
+    if not pushes:
+        return 0
+    # one git log for every ref: one per ref took about 10 s for 200 tags on Windows
+    every = _new_commits(cwd, [local for _, local, _ in pushes], published)
+    if every is not None and all(resolve.same_email(c.email, identity.email) for c in every):
+        return 0
+    # something is wrong, or a published sha is unknown here: per ref, for the list and hint
     seen: set[str] = set()
     wrong: list[PushedCommit] = []
     hint: list[str] = []
-    for local_ref, local_sha, remote_sha in _push_lines(stdin_text):
-        if _is_zero(local_sha):
-            continue  # a deletion publishes nothing
-        listed = _new_commits(cwd, local_sha, remote_sha)
+    for local_ref, local_sha, remote_sha in pushes:
+        own = [] if _is_zero(remote_sha) else [remote_sha]
+        excluded = published if every is not None else own
+        listed = _new_commits(cwd, [local_sha], excluded, check=not excluded)
+        if listed is None:  # its remote sha is unknown here: pushed from elsewhere, not fetched
+            listed = _new_commits(cwd, [local_sha], [], check=True)
         new = [commit for commit in listed if commit.sha not in seen]
         seen.update(commit.sha for commit in new)
         bad = [c for c in new if not resolve.same_email(c.email, identity.email)]

@@ -7,7 +7,7 @@ import shlex
 import pytest
 from helpers import git, run, write_script
 
-from git_shift import guard, store
+from git_shift import gitconfig, guard, store
 from git_shift.cli import main
 from git_shift.errors import GitShiftError
 
@@ -328,6 +328,37 @@ def test_a_remote_sha_unknown_here_still_checks_the_new_commits(repo, capsys):
     stdin = stdin_line(repo, remote_sha="1" * 40)  # pushed by someone, never fetched here
     assert guard.check_pre_push(repo, ["origin", url(repo)], stdin) == guard.BLOCK_EXIT
     assert f"\n  {bad}  {WRONG}\n" in capsys.readouterr().err
+
+
+def test_one_git_log_checks_every_pushed_ref(repo, monkeypatch):
+    refs = ["main", "a", "b", "c"]
+    for ref in refs[1:]:
+        commit(repo)
+        git(repo, "branch", ref)
+    commit(repo)
+    calls = []
+    real_run_git = gitconfig.run_git
+
+    def spy(*args, **kwargs):
+        calls.append(args)
+        return real_run_git(*args, **kwargs)
+
+    monkeypatch.setattr(gitconfig, "run_git", spy)
+    stdin = "".join(stdin_line(repo, ref) for ref in refs)
+    assert guard.check_pre_push(repo, ["origin", url(repo)], stdin) == 0
+    assert len([args for args in calls if "log" in args]) == 1
+
+
+def test_a_commit_the_remote_has_under_another_pushed_ref_is_not_new(repo, capsys):
+    commit(repo, WRONG)
+    wrong = git(repo, "rev-parse", "HEAD")
+    commit(repo)
+    stdin = (
+        stdin_line(repo, "main", remote_sha=wrong)  # the remote's main is the wrong commit
+        + f"refs/heads/old {wrong} refs/heads/old {ZERO}\n"
+    )
+    assert guard.check_pre_push(repo, ["origin", url(repo)], stdin) == 0
+    assert capsys.readouterr().err == ""
 
 
 def test_input_git_never_sends_is_an_error(repo):
