@@ -493,10 +493,19 @@ def _only_these(cwd: str | os.PathLike[str], tip: str, base: str | None, these: 
 
 
 def _reauthor_hint(
-    cwd: str | os.PathLike[str], branch: str, wrong: list[PushedCommit], listed: list[PushedCommit]
+    cwd: str | os.PathLike[str], ref: str, wrong: list[PushedCommit], listed: list[PushedCommit]
 ) -> list[str]:
-    """How to re-author the wrong commits of one pushed branch, whose new commits are listed
-    (the tip first)."""
+    """How to re-author the wrong commits of one pushed ref, whose new commits are listed
+    (the tip first). Amend and rebase work on a branch, or on a detached HEAD."""
+    if ref.startswith("refs/tags/"):
+        tag = ref.removeprefix("refs/tags/")
+        return [
+            "  then:     re-author them on their branch, then move the tag "
+            f"(git tag -f {tag} <commit>)"
+        ]
+    if not ref.startswith("refs/heads/") and ref != "HEAD":
+        return [f"  then:     re-author them on a branch, then point {ref} at them"]
+    branch = ref.removeprefix("refs/heads/")
     tip = listed[0]
     if wrong == [tip]:
         return [f"  then:     on {branch}: {_REAUTHOR}"]
@@ -548,7 +557,7 @@ def check_pre_push(cwd: str | os.PathLike[str], args: list[str], stdin_text: str
         seen.update(commit.sha for commit in new)
         bad = [c for c in new if not resolve.same_email(c.email, identity.email)]
         if bad and not hint:  # one hint, for the first ref with wrong commits
-            hint = _reauthor_hint(cwd, local_ref.removeprefix("refs/heads/"), bad, listed)
+            hint = _reauthor_hint(cwd, local_ref, bad, listed)
         wrong += bad
     if not wrong:
         return 0

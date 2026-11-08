@@ -210,6 +210,31 @@ def test_an_email_the_rebase_hint_cannot_quote_falls_back_with_a_warning(repo, m
     )
 
 
+def test_a_tag_gets_a_hint_it_can_follow(repo):
+    commit(repo)
+    assert push(repo).returncode == 0
+    bad = commit(repo, WRONG)
+    git(repo, "tag", "-a", "v1", "-m", "v1")  # an annotated tag: git hands over its own sha
+    proc = push(repo, "v1")
+    assert proc.returncode != 0
+    assert run(repo, "ls-remote", "origin", "refs/tags/v1").stdout == ""
+    lines = proc.stderr.splitlines()
+    assert lines[1] == f"  {bad}  {WRONG}"
+    assert (
+        "  then:     re-author them on their branch, then move the tag (git tag -f v1 <commit>)"
+        in lines
+    )
+
+
+def test_a_ref_that_is_no_branch_nor_tag_gets_a_general_hint(repo, capsys):
+    commit(repo, WRONG)
+    stdin = f"refs/custom/x {git(repo, 'rev-parse', 'HEAD')} refs/custom/x {ZERO}\n"
+    assert guard.check_pre_push(repo, ["origin", url(repo)], stdin) == guard.BLOCK_EXIT
+    assert "  then:     re-author them on a branch, then point refs/custom/x at them\n" in (
+        capsys.readouterr().err
+    )
+
+
 def test_more_than_ten_wrong_commits_are_cut_short(repo):
     bad = [commit(repo, WRONG) for _ in range(12)]
     lines = push(repo).stderr.splitlines()
