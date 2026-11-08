@@ -232,6 +232,24 @@ def test_a_lock_that_cannot_be_removed_never_hides_the_first_error(home, monkeyp
     )
 
 
+def test_backups_made_in_the_same_second_never_overwrite_each_other(home, monkeypatch):
+    first, second = home / "first", home / "second"
+    first.write_text("[user]\n\tname = First\n", encoding="utf-8")
+    second.write_text("[user]\n\tname = Second\n", encoding="utf-8")
+    made = [store._copy_to_backups(first), store._copy_to_backups(second)]
+    monkeypatch.setattr(store, "_stamp", lambda: "20260101-000000-000000")  # one clock tick
+    made += [store._copy_to_backups(first), store._copy_to_backups(second)]
+    assert len(set(made)) == 4
+    assert [path.read_bytes() for path in made] == [
+        first.read_bytes(),
+        second.read_bytes(),
+    ] * 2
+    assert sorted(path.name for path in paths.backups_dir().glob("gitconfig-*"))[:2] == [
+        "gitconfig-20260101-000000-000000",
+        "gitconfig-20260101-000000-000000-2",
+    ]
+
+
 def test_a_fresh_backup_is_taken_before_the_include_is_appended(home):
     # backup_global_config() copies the file only once ever: this write gets its own copy
     backups = paths.backups_dir()

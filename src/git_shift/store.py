@@ -10,6 +10,7 @@ import stat
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from . import gitconfig, paths
@@ -184,11 +185,22 @@ def global_config_file() -> Path | None:
     return None
 
 
+def _stamp() -> str:
+    """The local time to the microsecond, for backup names: they sort by time."""
+    return datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+
+
 def _copy_to_backups(source: Path) -> Path:
-    """A timestamped copy of a global config file in the backups dir."""
+    """A timestamped copy of a global config file in the backups dir. It never replaces an
+    earlier backup: the once-ever one and the one before an append can share a second."""
     backups = paths.backups_dir()
     backups.mkdir(parents=True, exist_ok=True)
-    target = backups / f"gitconfig-{time.strftime('%Y%m%d-%H%M%S')}"
+    stamp = _stamp()
+    target = backups / f"gitconfig-{stamp}"
+    count = 1
+    while target.exists():
+        count += 1
+        target = backups / f"gitconfig-{stamp}-{count}"
     tmp = temp_beside(target)
     shutil.copy2(source, tmp)
     replace_file(tmp, target)
