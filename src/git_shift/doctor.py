@@ -230,13 +230,12 @@ def _check_include() -> list[Finding]:
     first = store.global_config_file()  # the file `git config --global` reads and writes
     where = paths.to_git_path(first) if first else "your global git config"
     if late is None:  # missing, or only in the XDG file, which git reads before ~/.gitconfig
-        return [
-            Finding(
-                ERROR,
-                f"{where} does not include rules.gitconfig, so your identities may not apply",
-                f'git config --global --add include.path "{rules}"',
-            )
-        ]
+        if first is None or store.include_lands_last(first):
+            fix = f'git config --global --add include.path "{rules}"'
+        else:  # --add would put it in an [include] section that other settings follow
+            fix = f"add this line at the end of {where}: {store.include_line()}"
+        message = f"{where} does not include rules.gitconfig, so your identities may not apply"
+        return [Finding(ERROR, message, fix)]
     if late:
         return [
             Finding(

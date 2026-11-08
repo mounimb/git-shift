@@ -207,13 +207,76 @@ def _include_target(value: str) -> str:
     return paths.to_git_path(value)
 
 
+def _quoted(value: str) -> str:
+    """value as a double-quoted git config string: # and ; then never start a comment."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def include_line() -> str:
+    """The include of rules.gitconfig as one line of git config."""
+    return f"[include] path = {_quoted(paths.to_git_path(paths.rules_file()))}"
+
+
+def include_lands_last(file: Path) -> bool:
+    """Whether `git config --add include.path` would put the rules after every entry of
+    file. git adds to the file's last [include] section, which can come before a [user]
+    section: tried on a copy, so git decides."""
+    target = paths.to_git_path(paths.rules_file())
+    with tempfile.TemporaryDirectory(prefix="git-shift-") as directory:
+        copy = Path(directory) / "config"
+        shutil.copyfile(file, copy)
+        gitconfig.add_value("include.path", target, file=copy)
+        return gitconfig.list_entries(file=copy)[-1:] == [("include.path", target)]
+
+
+def _append_include(file: Path) -> None:
+    """Append a new [include] section for the rules at the end of file.
+
+    The one place git-shift writes the global config as text: `git config --add` would put
+    the path in the file's last [include] section, and a [user] section after it would then
+    beat every identity. git's lock file keeps a concurrent git config out meanwhile, and
+    appending in place keeps a symlinked file (dotfiles) and its mode as they are.
+    """
+    real = Path(os.path.realpath(file))
+    lock = real.with_name(real.name + ".lock")
+    where = paths.to_git_path(real)
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise GitShiftError(
+            f"could not lock {where}: {lock.name} exists, git is writing it"
+        ) from exc
+    except OSError as exc:
+        raise GitShiftError(f"could not lock {where}: {exc}") from exc
+    try:
+        data = real.read_bytes()
+        newline = b"" if not data or data.endswith(b"\n") else b"\n"
+        rules = _quoted(paths.to_git_path(paths.rules_file()))
+        with open(real, "ab") as config:
+            config.write(newline + f"[include]\n\tpath = {rules}\n".encode())
+    except OSError as exc:
+        raise GitShiftError(f"could not write {where}: {exc}") from exc
+    finally:
+        os.close(fd)
+        lock.unlink(missing_ok=True)
+
+
 def ensure_global_include() -> None:
     target = paths.to_git_path(paths.rules_file())
     current = gitconfig.get_all("include.path", scope="global")
     if target.casefold() in (_include_target(value).casefold() for value in current):
         return
     backup_global_config()
-    gitconfig.add_value("include.path", target, scope="global")
+    file = global_config_file()  # the one `git config --global` writes
+    if file is None or include_lands_last(file):
+        gitconfig.add_value("include.path", target, scope="global")
+    else:
+        _append_include(file)
+    if keys_after_global_include() != []:  # None: missing; a key: read after the rules
+        raise GitShiftError(
+            f"added the git-shift include to {paths.to_git_path(file or '~/.gitconfig')}, "
+            "but git does not read it after your other settings: run git shift doctor"
+        )
 
 
 def keys_after_global_include() -> list[str] | None:

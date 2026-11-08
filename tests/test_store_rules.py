@@ -116,12 +116,76 @@ def test_folder_with_glob_characters_matches_only_itself(home, make_repo):
     assert gitconfig.get("user.email", cwd=make_repo(home / "code o" / "app")) is None
 
 
-def test_add_warns_when_global_user_comes_after_the_include(home):
+INCLUDE_THEN_USER = "[include]\n\tpath = ~/.gitconfig.local\n[user]\n\temail = global@example.com\n"
+
+
+def rules_section():
+    rules = paths.to_git_path(paths.rules_file())
+    return f'[include]\n\tpath = "{rules}"\n'
+
+
+def test_add_puts_the_include_after_a_user_section_below_an_existing_include(home, make_repo):
+    # git config --add would put it in the top [include], before [user]: the global email
+    # would then beat every identity
+    (home / ".gitconfig").write_text(INCLUDE_THEN_USER, encoding="utf-8")
+    _, warnings = add(home)
+    assert not any("override" in w for w in warnings)
+    assert (home / ".gitconfig").read_text(encoding="utf-8") == INCLUDE_THEN_USER + rules_section()
+    assert store.keys_after_global_include() == []
+    assert git(make_repo(home / "code" / "app"), "config", "user.email") == "perso@example.com"
+    assert len(list(paths.backups_dir().glob("gitconfig-*"))) == 1
+
+
+def test_the_appended_include_is_written_once(home):
+    (home / ".gitconfig").write_text(INCLUDE_THEN_USER, encoding="utf-8")
+    add(home, "perso", "code")
+    after_first = (home / ".gitconfig").read_bytes()
+    add(home, "pro", "work")
+    assert (home / ".gitconfig").read_bytes() == after_first
+
+
+def test_the_include_is_appended_after_a_last_line_without_newline(home, make_repo):
+    config = INCLUDE_THEN_USER.rstrip("\n")
+    (home / ".gitconfig").write_text(config, encoding="utf-8", newline="\n")
+    add(home)
+    text = (home / ".gitconfig").read_text(encoding="utf-8")
+    assert text == config + "\n" + rules_section()
+    assert git(make_repo(home / "code" / "app"), "config", "user.email") == "perso@example.com"
+
+
+def test_the_appended_include_quotes_a_path_git_would_misread(home, monkeypatch, make_repo):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "my cfg #1; x"))  # a comment, unquoted
+    (home / ".gitconfig").write_text(INCLUDE_THEN_USER, encoding="utf-8")
+    add(home)
+    rules = paths.to_git_path(paths.rules_file())
+    assert gitconfig.get_all("include.path", scope="global")[-1] == rules
+    assert git(make_repo(home / "code" / "app"), "config", "user.email") == "perso@example.com"
+
+
+def test_the_appended_include_waits_for_git_s_lock(home):
+    (home / ".gitconfig").write_text(INCLUDE_THEN_USER, encoding="utf-8")
+    (home / ".gitconfig.lock").write_text("", encoding="utf-8")  # git is writing it
+    with pytest.raises(GitShiftError, match="lock"):
+        add(home)
+    assert (home / ".gitconfig").read_text(encoding="utf-8") == INCLUDE_THEN_USER
+    assert store.list_identities() == []
+
+
+def test_an_include_section_at_the_end_takes_the_path_through_git(home):
     (home / ".gitconfig").write_text(
-        "[include]\n\tpath = ~/.gitconfig.local\n[user]\n\temail = global@example.com\n",
+        "[user]\n\temail = global@example.com\n[include]\n\tpath = ~/.gitconfig.local\n",
         encoding="utf-8",
     )
-    _, warnings = add(home)
+    add(home)
+    text = (home / ".gitconfig").read_text(encoding="utf-8")
+    assert text.count("[include]") == 1
+    assert store.keys_after_global_include() == []
+
+
+def test_add_warns_when_global_user_comes_after_the_include(home):
+    add(home, "perso", "code")
+    git(home, "config", "--global", "user.email", "global@example.com")  # a [user] at the end
+    _, warnings = add(home, "pro", "work")
     assert any("can override your identities" in w for w in warnings)
 
 
@@ -188,25 +252,24 @@ def test_inherited_ssh_keys_lists_every_pair_with_the_deepest_key(home):
     ]
 
 
+def append_to_global_config(home, text):
+    with open(home / ".gitconfig", "a", encoding="utf-8") as config:
+        config.write(text)
+
+
 def test_add_warns_about_a_user_include_if_after_the_git_shift_include(home):
     (home / ".gitconfig.work").write_text("[user]\n\temail = old@example.com\n", encoding="utf-8")
-    (home / ".gitconfig").write_text(
-        "[include]\n\tpath = ~/.gitconfig.local\n"
-        '[includeIf "gitdir/i:~/work/"]\n\tpath = .gitconfig.work\n',
-        encoding="utf-8",
-    )
-    _, warnings = add(home)
+    add(home, "perso", "code")
+    append_to_global_config(home, '[includeIf "gitdir/i:~/work/"]\n\tpath = .gitconfig.work\n')
+    _, warnings = add(home, "pro", "other")
     assert any("user.email" in w and "can override" in w for w in warnings)
 
 
 def test_unreadable_include_after_git_shift_does_not_fail_add(home):
     (home / ".gitconfig-old").write_text("[user\n", encoding="utf-8")
-    (home / ".gitconfig").write_text(
-        "[include]\n\tpath = ~/.gitconfig.local\n"
-        '[includeIf "gitdir/i:~/old/"]\n\tpath = ~/.gitconfig-old\n',
-        encoding="utf-8",
-    )
-    identity, _ = add(home)
+    add(home, "perso", "code")
+    append_to_global_config(home, '[includeIf "gitdir/i:~/old/"]\n\tpath = ~/.gitconfig-old\n')
+    identity, _ = add(home, "pro", "work")
     assert identity.path.is_file()
 
 

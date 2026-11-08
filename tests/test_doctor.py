@@ -242,6 +242,23 @@ def test_a_missing_include_is_an_error_with_a_fix_that_works(home):
     assert errors(doctor.run(str(home))) == []
 
 
+def test_a_missing_include_below_an_include_section_gets_a_line_to_append(home, make_repo):
+    # git config --add would put it in that [include], before [user]: no command then
+    add(home)
+    config = "[include]\n\tpath = ~/.gitconfig.local\n[user]\n\temail = global@example.com\n"
+    (home / ".gitconfig").write_text(config, encoding="utf-8")
+    finding = only(doctor.run(str(home)), "does not include rules.gitconfig")
+    assert finding.level == doctor.ERROR
+    where = paths.to_git_path(home / ".gitconfig")
+    rules = paths.to_git_path(paths.rules_file())
+    line = f'[include] path = "{rules}"'
+    assert finding.fix == f"add this line at the end of {where}: {line}"
+    with open(home / ".gitconfig", "a", encoding="utf-8") as global_config:
+        global_config.write(line + "\n")  # as the fix says
+    assert errors(doctor.run(str(home))) == []
+    assert git(make_repo(home / "code" / "app"), "config", "user.email") == "perso@example.com"
+
+
 def test_an_include_only_in_the_xdg_file_is_an_error(home):
     # git reads ~/.gitconfig after it, so that file can override every identity
     xdg = paths.xdg_git_config()
