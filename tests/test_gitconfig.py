@@ -1,3 +1,4 @@
+import hashlib
 import os
 from pathlib import Path
 
@@ -84,6 +85,14 @@ def test_run_git_env_adds_to_the_environment(home):
     # the rest of the environment still reaches git, here HOME
     assert gitconfig.run_git("config", "user.name", env=env).stdout.strip() == "Tester"
     assert "GIT_CONFIG_COUNT" not in os.environ
+
+
+def test_run_git_input_reaches_git_byte_for_byte(home):
+    data = "a\nb é\n"  # Windows text mode would send \r\n, and the locale would garble é
+    blob = data.encode("utf-8")
+    expected = hashlib.sha1(b"blob %d\0" % len(blob) + blob).hexdigest()
+    proc = gitconfig.run_git("hash-object", "--stdin", input=data)
+    assert proc.stdout == f"{expected}\n"  # still text, as without input
 
 
 def test_home_fixture_hides_every_real_config(home):

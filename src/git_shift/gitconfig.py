@@ -19,14 +19,21 @@ class Origin:
     value: str
 
 
+def _text(data: bytes) -> str:
+    """Output as text mode decodes it: UTF-8, then universal newlines."""
+    return data.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def run_git(
     *args: str,
     cwd: str | Path | None = None,
     check: bool = True,
     env: dict[str, str | None] | None = None,
+    input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run git. env: variables to set for this call, on top of the current environment;
-    None removes one."""
+    None removes one. input: what git reads on stdin, sent as UTF-8; without it, stdin is
+    empty (inside hooks, stdin belongs to git: the pre-push refs)."""
     exe = paths.find_executable("git")
     if exe is None:
         raise GitShiftError("git is not installed or not on PATH")
@@ -36,16 +43,28 @@ def run_git(
         for name in (k for k, v in env.items() if v is None):
             child_env.pop(name, None)
     try:
-        proc = subprocess.run(
-            [exe, *args],
-            cwd=cwd,
-            env=child_env,
-            stdin=subprocess.DEVNULL,  # inside hooks, stdin belongs to git (pre-push refs)
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        if input is None:
+            proc = subprocess.run(
+                [exe, *args],
+                cwd=cwd,
+                env=child_env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        else:  # as bytes: text mode would send each "\n" as "\r\n" on Windows
+            raw = subprocess.run(
+                [exe, *args],
+                cwd=cwd,
+                env=child_env,
+                input=input.encode("utf-8"),
+                capture_output=True,
+            )
+            proc = subprocess.CompletedProcess(
+                raw.args, raw.returncode, _text(raw.stdout), _text(raw.stderr)
+            )
     except OSError as exc:
         raise GitShiftError(f"cannot run git: {exc}") from exc
     if check and proc.returncode != 0:
