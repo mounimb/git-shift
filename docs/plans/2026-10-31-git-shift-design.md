@@ -227,7 +227,7 @@ directory.
 |---|---|
 | `pre-commit` | If the repository is pinned with `use --here`, or else inside an identity's folder, the author email git will record must equal that identity's email. |
 | `pre-commit` | If the repository is outside every folder but its `origin` owner matches an identity's `gh` login, that identity's email is required. |
-| `pre-push` | Every commit being pushed (from the ranges git passes on stdin) must have the expected author email. |
+| `pre-push` | Every commit the push publishes for the first time must have the expected author email. Commits the remote already has, or that sit on any remote-tracking branch (someone else's work, fetched and merged), are never checked. The expected identity comes from the pin, the folder, then the GitHub owner of the push URL. |
 
 Blocked output:
 
@@ -244,6 +244,31 @@ Blocked output:
 `use --here` fixes a wrong `user.email`, but not `GIT_AUTHOR_EMAIL`,
 `author.email`, `--author` or the old author kept by `--amend`. `status`
 names the cause; the hook alone cannot tell them apart.
+
+Blocked push:
+
+```
+✗ git-shift: 2 commits to push are not authored by "perso" <jane@example.com> (matched by folder /home/jane/code/perso/)
+  6f4c3a2  jane@company.com
+  1766474  jane@company.com
+  fix:      git shift use perso --here  (why it is wrong: git shift status)
+  then:     on main: git rebase -r --exec "git commit --amend --reset-author --no-edit" 9eb3f92
+            this re-authors every commit after 9eb3f92
+  bypass:   pushing someone else's commits? git push --no-verify
+```
+
+- When git already records the right email (old commits made before the
+  setup was fixed), the `fix:` line becomes `config:   already right
+  (<email>): only these commits need re-authoring`.
+- When only the tip is wrong, `then:` is the amend command. When the rebase
+  range also holds commits the check left out (a teammate's merged work), the
+  exec only amends commits by the listed wrong emails:
+  `--exec "if git log -1 --format=%ae | grep -qixF -e <email>; then git commit
+  --amend --reset-author --no-edit; fi"`, so the other commits keep their
+  SHAs. Tags get "re-author them on their branch, then move the tag".
+- The happy path costs one `git log` for every pushed ref, with the shas on
+  its stdin. Commits are read with `--no-replace-objects`, so a `git replace`
+  cannot hide a wrong author.
 
 ### Failure policy
 
