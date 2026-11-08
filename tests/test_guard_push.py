@@ -2,7 +2,10 @@
 run this Python and the real check. Nothing is ever pushed to the network."""
 
 import itertools
+import os
 import shlex
+import shutil
+import subprocess
 
 import pytest
 from helpers import git, run, write_script
@@ -41,15 +44,23 @@ def repo(home, make_repo, tmp_path):
     return make_repo(home / "code" / "app", remote=str(bare(tmp_path / "origin.git")))
 
 
-def commit(repo, email=None):
+def commit(repo, email=None, date=None):
     """A commit that adds a file, as email (default: the configured one), made without any
-    hook. Returns its short sha."""
+    hook, at date (default: now). Returns its short sha."""
     name = f"file{next(_files)}.txt"
     (repo / name).write_text(name, encoding="utf-8")
     git(repo, "add", name)
     author = ["-c", "user.name=Someone", "-c", f"user.email={email}"] if email else []
-    git(repo, "-c", "core.hooksPath=no-hooks", *author, "commit", "-q", "-m", name)
+    command = ["-c", "core.hooksPath=no-hooks", *author, "commit", "-q", "-m", name]
+    git(repo, *command, env=dated(date))
     return git(repo, "rev-parse", "--short", "HEAD")
+
+
+def dated(date):
+    """The environment, with author and committer dates set to date (None: unchanged)."""
+    if date is None:
+        return None
+    return {**os.environ, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
 
 
 def push(repo, *args):
@@ -382,6 +393,57 @@ def test_the_log_output_encoding_cannot_garble_an_email(home, make_repo, tmp_pat
     proc = push(repo)
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr == ""
+
+
+def test_a_single_wrong_commit_below_the_tip_gets_the_rebase_hint(repo):
+    base = commit(repo)
+    assert push(repo).returncode == 0
+    commit(repo, WRONG)
+    commit(repo)  # the tip is right: an amend would fix nothing
+    lines = push(repo).stderr.splitlines()
+    assert lines[0].startswith("✗ git-shift: 1 commit to push is not authored by ")
+    assert f'  then:     on main: git rebase -r --exec "{REAUTHOR}" {base}' in lines
+
+
+def test_pushes_to_a_url_exclude_what_the_remote_already_has(repo, tmp_path):
+    target = str(bare(tmp_path / "plain.git"))  # a URL: git keeps no remote-tracking ref
+    commit(repo, WRONG)
+    assert run(repo, "push", "-q", "--no-verify", target, "main").returncode == 0
+    commit(repo)
+    proc = run(repo, "push", "-q", target, "main")  # git hands over the remote's sha
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+
+
+def test_the_list_and_hint_follow_the_history_when_dates_disagree(repo):
+    base = commit(repo, date="2000-01-01T00:00:00Z")
+    assert push(repo).returncode == 0
+    x = commit(repo, WRONG, date="2008-01-01T00:00:00Z")  # the oldest wrong commit
+    git(repo, "switch", "-q", "-c", "side")
+    child = commit(repo, WRONG, date="2001-01-01T00:00:00Z")  # dated before its parent x
+    git(repo, "switch", "-q", "main")
+    commit(repo, date="2009-01-01T00:00:00Z")
+    merge = ["-c", "core.hooksPath=no-hooks", "merge", "-q", "--no-ff", "-m", "merge", "side"]
+    git(repo, *merge, env=dated("2010-01-01T00:00:00Z"))
+    lines = push(repo).stderr.splitlines()
+    assert lines[1:3] == [f"  {child}  {WRONG}", f"  {x}  {WRONG}"]  # date order: x first
+    assert f'  then:     on main: git rebase -r --exec "{REAUTHOR}" {base}' in lines
+
+
+@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="signing needs ssh-keygen")
+def test_a_signed_commit_is_read_even_when_git_log_shows_signatures(repo, tmp_path):
+    key = tmp_path / "key"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+    git(repo, "config", "log.showSignature", "true")  # git log then prints more lines
+    (repo / "signed.txt").write_text("signed", encoding="utf-8")
+    git(repo, "add", "signed.txt")
+    signing = ["-c", "gpg.format=ssh", "-c", f"user.signingKey={key}.pub"]
+    author = ["-c", f"user.email={WRONG}"]
+    git(repo, "-c", "core.hooksPath=no-hooks", *signing, *author, "commit", "-q", "-S", "-m", "x")
+    bad = git(repo, "rev-parse", "--short", "HEAD")
+    proc = push(repo)
+    assert proc.returncode != 0, proc.stderr
+    assert f"\n  {bad}  {WRONG}\n" in proc.stderr
 
 
 def test_input_git_never_sends_is_an_error(repo):
