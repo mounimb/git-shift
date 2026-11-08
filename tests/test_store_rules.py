@@ -176,6 +176,18 @@ def test_the_appended_include_respects_git_s_lock(home):
     assert store.list_identities() == []
 
 
+def test_a_fresh_backup_is_taken_before_the_include_is_appended(home):
+    # backup_global_config() copies the file only once ever: this write gets its own copy
+    backups = paths.backups_dir()
+    backups.mkdir(parents=True)
+    old = backups / "gitconfig-20200101-000000"
+    old.write_text("[core]\n\teditor = vi\n", encoding="utf-8")
+    (home / ".gitconfig").write_text(INCLUDE_THEN_USER, encoding="utf-8")
+    add(home)
+    fresh = [path for path in backups.glob("gitconfig-*") if path != old]
+    assert [path.read_text(encoding="utf-8") for path in fresh] == [INCLUDE_THEN_USER]
+
+
 def test_an_append_git_would_misread_leaves_the_file_untouched(home):
     # a last line ending with \ continues on the next one: git would read
     # user.name = "Some [include]" and a stray user.path

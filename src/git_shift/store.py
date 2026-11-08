@@ -183,18 +183,23 @@ def global_config_file() -> Path | None:
     return None
 
 
-def backup_global_config() -> Path | None:
-    """Copy the global config once, before git-shift changes it for the first time."""
-    source = global_config_file()
+def _copy_to_backups(source: Path) -> Path:
+    """A timestamped copy of a global config file in the backups dir."""
     backups = paths.backups_dir()
-    if source is None or any(backups.glob("gitconfig-*")):
-        return None
     backups.mkdir(parents=True, exist_ok=True)
     target = backups / f"gitconfig-{time.strftime('%Y%m%d-%H%M%S')}"
     tmp = temp_beside(target)
     shutil.copy2(source, tmp)
     replace_file(tmp, target)
     return target
+
+
+def backup_global_config() -> Path | None:
+    """Copy the global config once, before git-shift changes it for the first time."""
+    source = global_config_file()
+    if source is None or any(paths.backups_dir().glob("gitconfig-*")):
+        return None
+    return _copy_to_backups(source)
 
 
 def _include_target(value: str) -> str:
@@ -262,6 +267,7 @@ def _append_include(file: Path) -> None:
             out.flush()
             os.fsync(out.fileno())
         _check_appended(real, lock, where)
+        _copy_to_backups(real)  # fresh: backup_global_config() copies only once ever
         shutil.copymode(real, lock)
         replace_file(lock, real)
     except BaseException as exc:
@@ -296,12 +302,12 @@ def ensure_global_include() -> None:
     current = gitconfig.get_all("include.path", scope="global")
     if target.casefold() in (_include_target(value).casefold() for value in current):
         return
-    backup_global_config()
     file = global_config_file()  # the one `git config --global` writes
     if file is None or include_lands_last(file):
+        backup_global_config()
         gitconfig.add_value("include.path", target, scope="global")
     else:
-        _append_include(file)
+        _append_include(file)  # with its own backup
     if keys_after_global_include() != []:  # None: missing; a key: read after the rules
         raise GitShiftError(
             f"added the git-shift include to {paths.to_git_path(file or '~/.gitconfig')}, "
