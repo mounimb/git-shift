@@ -560,13 +560,23 @@ def check_pre_push(cwd: str | os.PathLike[str], args: list[str], stdin_text: str
     ]
     if len(wrong) > _SHOWN:
         lines.append(f"  … and {len(wrong) - _SHOWN} more")
-    lines += [
-        f"  fix:      git shift use {identity.name} --here  (why it is wrong: git shift status)",
-        *hint,
-        "  bypass:   pushing someone else's commits? git push --no-verify",
-    ]
+    lines += [_email_fix(cwd, identity), *hint]
+    lines.append("  bypass:   pushing someone else's commits? git push --no-verify")
     print("\n".join(lines), file=sys.stderr)
     return BLOCK_EXIT
+
+
+def _email_fix(cwd: str | os.PathLike[str], identity: store.Identity) -> str:
+    """How to make git record the right email, unless it already does: the wrong commits
+    can be older (made before git-shift, or with --author). One git var: pre-push gets no
+    GIT_AUTHOR_EMAIL."""
+    try:
+        current = author_email(cwd)
+    except GitShiftError:
+        current = None  # cannot tell: keep the usual fix
+    if current is not None and resolve.same_email(current, identity.email):
+        return f"  config:   already right ({current}): only these commits need re-authoring"
+    return f"  fix:      git shift use {identity.name} --here  (why it is wrong: git shift status)"
 
 
 def _error_lines(exc: Exception) -> list[str]:

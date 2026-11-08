@@ -97,11 +97,12 @@ def follow_hint(repo, stderr):
 # what the check blocks, and how the hints fix it
 
 
-def test_a_wrong_tip_is_blocked_and_the_amend_hint_fixes_it(repo):
+def test_a_wrong_tip_is_blocked_and_the_fix_then_the_amend_hint_work(repo, monkeypatch):
     commit(repo)
     assert push(repo).returncode == 0
     before = published(repo)
-    bad = commit(repo, WRONG)
+    git(repo, "config", "user.email", WRONG)  # git records the wrong email from now on
+    bad = commit(repo)
     proc = push(repo)
     assert proc.returncode != 0
     assert published(repo) == before
@@ -109,14 +110,40 @@ def test_a_wrong_tip_is_blocked_and_the_amend_hint_fixes_it(repo):
         f'✗ git-shift: 1 commit to push is not authored by "perso" <{EMAIL}> (matched by folder '
     )
     lines = proc.stderr.splitlines()
-    assert lines[1] == f"  {bad}  {WRONG}"
-    assert f"  then:     on main: {REAUTHOR}" in lines
-    assert "  fix:      git shift use perso --here  (why it is wrong: git shift status)" in lines
-    assert "  bypass:   pushing someone else's commits? git push --no-verify" in lines
-    git(repo, *REAUTHOR.split()[1:])  # as shown, through the pre-commit check
+    assert lines[1:5] == [
+        f"  {bad}  {WRONG}",
+        "  fix:      git shift use perso --here  (why it is wrong: git shift status)",
+        f"  then:     on main: {REAUTHOR}",
+        "  bypass:   pushing someone else's commits? git push --no-verify",
+    ]
+    monkeypatch.chdir(repo)
+    assert main(["use", "perso", "--here"]) == 0
+    follow_hint(repo, proc.stderr)  # through the pre-commit check
     proc = push(repo)
     assert proc.returncode == 0, proc.stderr
     assert published(repo) == git(repo, "rev-parse", "HEAD")
+
+
+def test_when_git_already_records_the_right_email_only_the_commits_need_fixing(repo):
+    bad = commit(repo, WRONG)  # say, made before git-shift
+    lines = push(repo).stderr.splitlines()
+    assert lines[1:4] == [
+        f"  {bad}  {WRONG}",
+        f"  config:   already right ({EMAIL}): only these commits need re-authoring",
+        f"  then:     on main: {REAUTHOR}",
+    ]
+
+
+def test_without_the_configured_email_the_fix_line_stays(repo, monkeypatch, capsys):
+    def fail(cwd):
+        raise GitShiftError("git var failed")
+
+    commit(repo, WRONG)
+    monkeypatch.setattr(guard, "author_email", fail)
+    assert guard.check_pre_push(repo, ["origin", url(repo)], stdin_line(repo)) == guard.BLOCK_EXIT
+    assert "  fix:      git shift use perso --here  (why it is wrong: git shift status)\n" in (
+        capsys.readouterr().err
+    )
 
 
 def test_several_wrong_commits_are_blocked_and_the_rebase_hint_fixes_them(repo):
