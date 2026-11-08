@@ -108,6 +108,29 @@ def test_expected_for_repo_prefers_folder_then_remote(home, make_repo):
     assert resolve.expected_for_repo(unrelated, identities) is None
 
 
+def test_match_for_repo_says_which_rule_matched(home, make_repo):
+    add(home, "perso", "code", gh="alice")
+    add(home, "pro", "work")
+    identities = store.list_identities()
+    inside = make_repo(home / "code" / "app")
+    outside = make_repo(home / "Desktop" / "x", remote="https://github.com/alice/x.git")
+    pinned = make_repo(home / "Desktop" / "y")
+    git(pinned, "config", "--local", resolve.PIN_KEY, "pro")
+    found = [resolve.match_for_repo(repo, identities) for repo in (inside, outside, pinned)]
+    assert [(match.identity.name, match.kind) for match in found] == [
+        ("perso", resolve.FOLDER),
+        ("perso", resolve.REMOTE),
+        ("pro", resolve.PIN),
+    ]
+    folder = found[0].identity.folder
+    assert [match.reason for match in found] == [
+        f"folder {folder}",
+        "GitHub owner alice",
+        "pin in .git/config",
+    ]
+    assert resolve.match_for_repo(make_repo(home / "Desktop" / "z"), identities) is None
+
+
 def test_remote_check_sees_insteadof_rewrites_like_pre_push(home, make_repo):
     add(home, "perso", "code", gh="mounimb")
     git(home, "config", "--global", "url.git@github.com:.insteadOf", "gh:")

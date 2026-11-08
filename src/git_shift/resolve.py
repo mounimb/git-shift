@@ -16,6 +16,7 @@ _EMAIL_CRUD = "".join(map(chr, range(33))) + GIT_IDENT_CRUD  # git's crud(): als
 _EMAIL_DELIMITERS = str.maketrans("", "", "<>\n")
 PIN_KEY = "gitshift.identity"  # written to the repo's own config by `git shift use --here`
 PIN_REASON = "pin in .git/config"
+PIN, FOLDER, REMOTE = "pin", "folder", "remote"  # how an identity matched: Match.kind
 _WORKTREE_CONFIG = "config.worktree"
 # git's words, read with LC_ALL=C because they can be translated. With "fatal:", so a folder
 # named like this in another message (dubious ownership quotes the path) does not match.
@@ -101,11 +102,20 @@ def pinned_name(cwd: str | os.PathLike[str]) -> str | None:
     return _read_pin(cwd) if git_dir(cwd) is not None else None
 
 
-def expected_for_repo(
+@dataclass(frozen=True)
+class Match:
+    """The identity a repository must use, and why."""
+
+    identity: Identity
+    kind: str  # PIN | FOLDER | REMOTE: for code
+    reason: str  # for people: "pin in .git/config", "folder ...", "GitHub owner ..."
+
+
+def match_for_repo(
     cwd: str | os.PathLike[str], identities: list[Identity], remote_url: str | None = None
-) -> tuple[Identity, str] | None:
-    """The identity a repository must use, and the reason: the repository's pin first,
-    then its folder, then its remote.
+) -> Match | None:
+    """The identity a repository must use, and why: the repository's pin first, then its
+    folder, then its remote.
 
     A pin naming a missing identity, or one without an email, is ignored. Folders are
     matched against the git directory, like includeIf gitdir, so worktrees and separate
@@ -116,16 +126,24 @@ def expected_for_repo(
     name = _read_pin(cwd) if directory is not None else None
     pinned = [identity for identity in identities if identity.name == name and identity.email]
     if pinned:
-        return pinned[0], PIN_REASON
+        return Match(pinned[0], PIN, PIN_REASON)
     location = directory or os.fspath(cwd)
     identity = expected_identity(location, identities)
     if identity is not None:
-        return identity, f"folder {identity.folder}"
+        return Match(identity, FOLDER, f"folder {identity.folder}")
     url = remote_url or origin_url(cwd)
     identity = remote_identity(url, identities) if url else None
     if identity is not None:
-        return identity, f"GitHub owner {identity.gh}"
+        return Match(identity, REMOTE, f"GitHub owner {identity.gh}")
     return None
+
+
+def expected_for_repo(
+    cwd: str | os.PathLike[str], identities: list[Identity], remote_url: str | None = None
+) -> tuple[Identity, str] | None:
+    """match_for_repo as (identity, reason)."""
+    match = match_for_repo(cwd, identities, remote_url)
+    return (match.identity, match.reason) if match else None
 
 
 def _local_config(cwd: str | os.PathLike[str]) -> str | None:
