@@ -129,6 +129,30 @@ def test_git_older_than_2_13_is_an_error(home, monkeypatch):
     assert "2.13" in finding.message
 
 
+def test_a_malformed_global_config_is_one_error_quoting_git(home, capsys):
+    # every git command fails then, even git --version: nothing else can be checked
+    (home / ".gitconfig").write_text("[user\n", encoding="utf-8")
+    findings = doctor.run(str(home))
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.level == doctor.ERROR
+    assert finding.message.startswith("your git config cannot be read: fatal: bad config line 1")
+    assert ".gitconfig" in finding.message
+    assert finding.fix == "correct the line git names"
+    capsys.readouterr()
+    assert main(["doctor"]) == 1
+
+
+def test_without_git_doctor_says_so(home, monkeypatch):
+    real = paths.find_executable
+    monkeypatch.setattr(
+        paths, "find_executable", lambda name: None if name == "git" else real(name)
+    )
+    assert [(f.level, f.message) for f in doctor.run(str(home))] == [
+        (doctor.ERROR, "git is not installed or not on PATH")
+    ]
+
+
 def test_git_version_is_reported(home):
     major, minor = gitconfig.git_version()
     assert only(doctor.run(str(home)), f"git {major}.{minor}").level == doctor.OK

@@ -45,6 +45,9 @@ def run(cwd: str | os.PathLike[str]) -> list[Finding]:
     with gitconfig.outside_repositories():
         try:
             version = gitconfig.git_version()
+        except GitCommandError as exc:  # even git --version reads the config: all git fails
+            message = f"your git config cannot be read: {_git_said(exc)}"
+            return [Finding(ERROR, message, "correct the line git names")]
         except GitShiftError as exc:
             return [Finding(ERROR, str(exc))]  # without git nothing else can be checked
         findings = [_check_git(version)]
