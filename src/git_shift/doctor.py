@@ -1,6 +1,7 @@
 """Health checks behind `git shift doctor`: each finding says what is wrong and how to fix it.
 
-doctor only reads: the fixes are printed for the user to run.
+doctor only reads. `--fix` rewrites rules.gitconfig, a file git-shift fully owns, from the
+identity files, and nothing else: the other fixes are printed for the user to run.
 """
 
 from __future__ import annotations
@@ -57,6 +58,22 @@ def run(cwd: str | os.PathLike[str]) -> list[Finding]:
     findings += _guarded("the guard", _check_guard)
     findings += _guarded("this repository", lambda: _check_repo(cwd, identities))
     return findings
+
+
+def fix_rules() -> Finding:
+    """Rewrite rules.gitconfig from the identity files, when they all load."""
+    identities, unreadable = load_identities()
+    if unreadable:
+        return Finding(ERROR, "rules.gitconfig not rewritten: an identity file cannot be read")
+    count = _count(identities)
+    try:
+        fresh = paths.rules_file().is_file() and rules_up_to_date(identities)
+    except GitShiftError:
+        fresh = False  # malformed: rewriting it is the fix
+    if fresh:
+        return Finding(OK, f"rules.gitconfig already matches your {count}: nothing to rewrite")
+    store.write_rules(identities)
+    return Finding(OK, f"rewrote rules.gitconfig from your {count}")
 
 
 def load_identities() -> tuple[list[store.Identity], list[Finding]]:

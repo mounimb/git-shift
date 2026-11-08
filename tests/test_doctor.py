@@ -354,7 +354,7 @@ def test_rules_that_differ_only_in_ascii_case_are_up_to_date(home):
     assert none(doctor.run(str(home)), OUT_OF_DATE)
 
 
-def test_a_hand_edited_folder_makes_the_rules_out_of_date(home, make_repo):
+def test_a_hand_edited_folder_makes_the_rules_out_of_date_until_fix(home, make_repo, capsys):
     add(home)
     (home / "projects").mkdir()
     path = store.identity_path("perso")
@@ -362,6 +362,9 @@ def test_a_hand_edited_folder_makes_the_rules_out_of_date(home, make_repo):
     repo = make_repo(home / "projects" / "app")
     assert gitconfig.get("user.email", cwd=repo) is None  # git still has the old rule
     assert only(doctor.run(str(home)), OUT_OF_DATE).level == doctor.ERROR
+    capsys.readouterr()
+    assert main(["doctor", "--fix"]) == 0
+    assert git(repo, "config", "user.email") == "perso@example.com"
 
 
 def test_a_folder_that_resolves_differently_after_add_is_out_of_date(home):
@@ -377,6 +380,77 @@ def test_a_folder_that_resolves_differently_after_add_is_out_of_date(home):
 def test_up_to_date_rules_are_ok(home):
     add(home)
     assert only(doctor.run(str(home)), "rules.gitconfig matches").level == doctor.OK
+
+
+# doctor --fix ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("edit", ["drop", "swap"])
+def test_fix_rewrites_a_hand_edited_rules_file_and_nothing_else(home, capsys, edit):
+    add(home, "perso", "code")
+    add(home, "lab", "code/lab")
+    guard.install()
+    rules = paths.rules_file()
+    written = rules.read_bytes()
+    header, sections = rule_sections(rules)
+    edited = sections[:1] if edit == "drop" else sections[::-1]
+    rules.write_text(header + "".join(edited), encoding="utf-8")
+    global_config = (home / ".gitconfig").read_bytes()
+    capsys.readouterr()
+    assert main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert f"✗ {OUT_OF_DATE}" in out
+    assert "  fix: git shift doctor --fix\n" in out
+
+    assert main(["doctor", "--fix"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("✓ rewrote rules.gitconfig from your 2 identities\n")
+    assert OUT_OF_DATE not in out
+    assert rules.read_bytes() == written
+    assert (home / ".gitconfig").read_bytes() == global_config
+    assert main(["doctor"]) == 0
+
+
+def test_fix_with_up_to_date_rules_rewrites_nothing_and_says_what_it_leaves(
+    home, monkeypatch, capsys
+):
+    add(home)  # the guard is not installed: a warning --fix leaves alone
+    calls = []
+    monkeypatch.setattr(store, "write_rules", calls.append)
+    capsys.readouterr()
+    assert main(["doctor", "--fix"]) == 0
+    out = capsys.readouterr().out
+    assert calls == []
+    assert out.startswith("✓ rules.gitconfig already matches your 1 identity: nothing to rewrite\n")
+    assert "! the guard is not installed" in out
+    assert out.endswith("--fix only rewrites rules.gitconfig: run the other fixes yourself\n")
+
+
+def test_fix_leaves_the_rules_alone_when_an_identity_cannot_be_read(home, capsys):
+    add(home, "perso", "code")
+    add(home, "pro", "work")
+    rules = paths.rules_file()
+    before = rules.read_bytes()
+    store.identity_path("pro").write_text("[user\n", encoding="utf-8")
+    capsys.readouterr()
+    assert main(["doctor", "--fix"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("✗ rules.gitconfig not rewritten: an identity file cannot be read\n")
+    assert '✗ cannot read identity "pro"' in out
+    assert rules.read_bytes() == before
+
+
+def test_fix_never_writes_the_global_config(home, capsys):
+    add(home)
+    gitconfig.unset("include.path", scope="global")
+    paths.rules_file().unlink()
+    global_config = (home / ".gitconfig").read_bytes()
+    capsys.readouterr()
+    assert main(["doctor", "--fix"]) == 1  # the include is still missing
+    out = capsys.readouterr().out
+    assert out.startswith("✓ rewrote rules.gitconfig from your 1 identity\n")
+    assert "✗ " in out and "does not include rules.gitconfig" in out
+    assert (home / ".gitconfig").read_bytes() == global_config
 
 
 # gh -------------------------------------------------------------------------------------------

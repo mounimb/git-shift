@@ -200,9 +200,13 @@ def _print_finding(finding: doctor.Finding) -> None:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    if args.fix:
+        _print_finding(doctor.fix_rules())
     findings = doctor.run(os.getcwd())
     for finding in findings:
         _print_finding(finding)
+    if args.fix and any(finding.level != doctor.OK for finding in findings):
+        print("--fix only rewrites rules.gitconfig: run the other fixes yourself")
     return 1 if any(finding.level == doctor.ERROR for finding in findings) else 0
 
 
@@ -247,7 +251,10 @@ def build_parser() -> argparse.ArgumentParser:
     use.add_argument("name", metavar="IDENTITY")
     use.add_argument("--here", action="store_true", help="write it to this repo's config")
 
-    sub.add_parser("doctor", help="check your setup and say how to fix it")
+    doctor_parser = sub.add_parser("doctor", help="check your setup and say how to fix it")
+    doctor_parser.add_argument(
+        "--fix", action="store_true", help="rewrite rules.gitconfig from your identity files"
+    )
 
     guard_parser = sub.add_parser("guard", help="block commits made with the wrong identity")
     guard_sub = guard_parser.add_subparsers(dest="guard_command", required=True, metavar="<action>")
