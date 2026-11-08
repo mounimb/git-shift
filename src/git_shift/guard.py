@@ -7,7 +7,6 @@ import re
 import shlex
 import shutil
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
@@ -164,34 +163,16 @@ def _global_files() -> list[str]:
     return [paths.to_git_path(file) for file in reversed(paths.global_config_files())]
 
 
-# What tells git which repository it is in: a read without them finds none
-_REPOSITORY_ENV = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_COMMON_DIR",
-    "GIT_INDEX_FILE",
-    "GIT_PREFIX",
-    "GIT_IMPLICIT_WORK_TREE",
-    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-)
-
-
 def _hooks_paths(*, scope: str | None = None, file: str | None = None) -> list[gitconfig.Origin]:
     """Every core.hooksPath in a config file (or scope) and the files it includes, read
     outside any repository. git checks [includeIf] gitdir and onbranch against the current
     repository, so from inside a work repository a work-only hooksPath would pass for the
-    global one. Read from a new empty dir whose parent is a ceiling, those conditions are
-    false and plain [include] still applies. realpath: a Windows short name in the temp
-    path would not match the ceiling."""
-    neutral = os.path.realpath(tempfile.mkdtemp(prefix="git-shift-"))
-    env: dict[str, str | None] = dict.fromkeys(_REPOSITORY_ENV)
-    env["GIT_CEILING_DIRECTORIES"] = os.path.dirname(neutral)
-    try:
+    global one. Outside any repository those conditions are false and plain [include]
+    still applies."""
+    with gitconfig.outside_repositories():
         return gitconfig.get_all_with_origin(
-            "core.hooksPath", scope=scope, file=file, includes=True, cwd=neutral, env=env
+            "core.hooksPath", scope=scope, file=file, includes=True
         )
-    finally:
-        shutil.rmtree(neutral, ignore_errors=True)
 
 
 def _global_entries() -> list[gitconfig.Origin]:

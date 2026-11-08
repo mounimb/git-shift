@@ -158,21 +158,27 @@ def test_a_malformed_identity_is_an_error_and_the_other_checks_still_run(home):
     assert not none(findings, "the guard is")
 
 
-def test_a_malformed_repo_config_is_reported_with_the_file_git_names(
+def test_a_malformed_repo_config_is_one_error_and_spares_the_global_checks(
     home, make_repo, monkeypatch, capsys
 ):
-    # every git config call from that repository fails, also the ones reading identities
+    # every git config call from that repository fails: the global ones run from elsewhere
     add(home)
+    guard.install()
     repo = make_repo(home / "code" / "app")
     with open(repo / ".git" / "config", "a", encoding="utf-8") as config:
         config.write("[user\n")
     monkeypatch.chdir(repo)
     findings = doctor.run(str(repo))
-    assert errors(findings)
-    assert all(".git/config" in message for message in errors(findings))
-    assert not none(findings, "the guard is")
+    assert len(errors(findings)) == 1
+    assert errors(findings)[0].startswith("git refuses to work in this repository:\n")
+    assert ".git/config" in errors(findings)[0]
+    assert at(findings, doctor.WARN) == []
+    for text in ("1 identity: perso", "includes rules.gitconfig", "rules.gitconfig matches"):
+        assert only(findings, text).level == doctor.OK
+    paths.rules_file().unlink()
     capsys.readouterr()
-    assert main(["doctor"]) == 1
+    assert main(["doctor", "--fix"]) == 1  # the repository is still broken
+    assert capsys.readouterr().out.startswith("✓ rewrote rules.gitconfig from your 1 identity\n")
 
 
 def test_an_identity_without_a_usable_folder_is_a_warning(home):

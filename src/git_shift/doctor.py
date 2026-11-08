@@ -39,29 +39,37 @@ class Finding:
 
 def run(cwd: str | os.PathLike[str]) -> list[Finding]:
     """Every check, in order. A check that git makes fail becomes an error finding, and the
-    other checks still run."""
-    try:
-        version = gitconfig.git_version()
-    except GitShiftError as exc:
-        return [Finding(ERROR, str(exc))]  # without git nothing else can be checked
-    findings = [_check_git(version)]
-    identities, unreadable = load_identities()
-    have_files = bool(identities or unreadable)
-    findings += unreadable
-    findings += _check_identities(identities, have_files)
-    if have_files:
-        findings += _guarded("the git-shift include", _check_include)
-        findings += _guarded("the global author keys", _check_overrides)
-    if not unreadable:  # the rules of an unreadable identity are unknown
-        findings += _guarded("rules.gitconfig", lambda: _check_rules(identities))
-    findings += _guarded("gh", lambda: _check_gh(identities))
-    findings += _guarded("the guard", _check_guard)
+    other checks still run. Only the repository checks run from cwd: the others read the
+    global config and git-shift's files from outside any repository, so a broken
+    .git/config here is reported once, by the repository check."""
+    with gitconfig.outside_repositories():
+        try:
+            version = gitconfig.git_version()
+        except GitShiftError as exc:
+            return [Finding(ERROR, str(exc))]  # without git nothing else can be checked
+        findings = [_check_git(version)]
+        identities, unreadable = load_identities()
+        have_files = bool(identities or unreadable)
+        findings += unreadable
+        findings += _check_identities(identities, have_files)
+        if have_files:
+            findings += _guarded("the git-shift include", _check_include)
+            findings += _guarded("the global author keys", _check_overrides)
+        if not unreadable:  # the rules of an unreadable identity are unknown
+            findings += _guarded("rules.gitconfig", lambda: _check_rules(identities))
+        findings += _guarded("gh", lambda: _check_gh(identities))
+        findings += _guarded("the guard", _check_guard)
     findings += _guarded("this repository", lambda: _check_repo(cwd, identities))
     return findings
 
 
 def fix_rules() -> Finding:
     """Rewrite rules.gitconfig from the identity files, when they all load."""
+    with gitconfig.outside_repositories():
+        return _fix_rules()
+
+
+def _fix_rules() -> Finding:
     identities, unreadable = load_identities()
     if unreadable:
         return Finding(ERROR, "rules.gitconfig not rewritten: an identity file cannot be read")

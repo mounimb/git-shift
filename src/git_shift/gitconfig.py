@@ -4,12 +4,28 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import paths
 from .errors import GitCommandError, GitShiftError
+
+# What tells git which repository it is in: a read without them finds none
+REPOSITORY_ENV = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_PREFIX",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+)
+_outside: tuple[str, dict[str, str | None]] | None = None  # set by outside_repositories()
 
 
 @dataclass(frozen=True)
@@ -17,6 +33,28 @@ class Origin:
     kind: str  # "file", "command line", "blob", "standard input"
     path: str  # absolute config file path when kind == "file", else ""
     value: str
+
+
+@contextmanager
+def outside_repositories() -> Iterator[None]:
+    """Meanwhile, git calls made without cwd run outside any repository: from a new empty
+    dir whose parent is a ceiling, without the variables that name a repository. git then
+    reads no .git/config, so a broken one in the current directory cannot fail them, and
+    [includeIf] gitdir and onbranch are false while plain [include] still applies.
+    realpath: a Windows short name in the temp path would not match the ceiling."""
+    global _outside
+    if _outside is not None:  # already outside
+        yield
+        return
+    directory = os.path.realpath(tempfile.mkdtemp(prefix="git-shift-"))
+    env: dict[str, str | None] = dict.fromkeys(REPOSITORY_ENV)
+    env["GIT_CEILING_DIRECTORIES"] = os.path.dirname(directory)
+    _outside = (directory, env)
+    try:
+        yield
+    finally:
+        _outside = None
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 def _text(data: bytes) -> str:
@@ -37,6 +75,9 @@ def run_git(
     exe = paths.find_executable("git")
     if exe is None:
         raise GitShiftError("git is not installed or not on PATH")
+    if cwd is None and _outside is not None:
+        cwd, outside_env = _outside
+        env = {**outside_env, **(env or {})}
     child_env = None
     if env:
         child_env = {**os.environ, **{k: v for k, v in env.items() if v is not None}}

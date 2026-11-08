@@ -140,3 +140,19 @@ def test_set_value_replace_all_overwrites_every_value(home):
         gitconfig.set_value("user.email", "new@example.com", scope="global")
     gitconfig.set_value("user.email", "new@example.com", scope="global", replace_all=True)
     assert gitconfig.get_all("user.email", scope="global") == ["new@example.com"]
+
+
+def test_outside_repositories_hides_the_repository_of_the_current_directory(
+    home, make_repo, monkeypatch
+):
+    repo = make_repo(home / "app")
+    git(repo, "config", "user.email", "local@example.com")
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
+    assert gitconfig.get("user.email") == "local@example.com"
+    with gitconfig.outside_repositories():
+        assert gitconfig.get("user.email") is None
+        assert gitconfig.get("user.email", cwd=repo) == "local@example.com"  # cwd given
+        with gitconfig.outside_repositories():  # nested: still outside
+            assert gitconfig.get("user.email") is None
+    assert gitconfig.get("user.email") == "local@example.com"
