@@ -187,6 +187,38 @@ def test_wrong_commits_back_to_the_root_get_a_root_rebase_hint(repo):
     assert proc.returncode == 0, proc.stderr
 
 
+def wrong_below_a_right_tip(repo):
+    """A pushed base, then a wrong commit and a right one. Returns the base's short sha and
+    the line git gives pre-push."""
+    base = commit(repo)
+    assert push(repo).returncode == 0
+    commit(repo, WRONG)
+    commit(repo)
+    return base, stdin_line(repo, remote_sha=git(repo, "rev-parse", "origin/main"))
+
+
+def test_git_without_rebase_r_gets_an_interactive_rebase_hint(repo, monkeypatch, capsys):
+    base, stdin = wrong_below_a_right_tip(repo)
+    monkeypatch.setattr(gitconfig, "git_version", lambda: (2, 17))  # -r came in 2.18
+    assert guard.check_pre_push(repo, ["origin", url(repo)], stdin) == guard.BLOCK_EXIT
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[3:5] == [
+        f'  then:     on main: git rebase -i {base}, set the listed commits to "edit", at each:',
+        f"            {REAUTHOR} && git rebase --continue",
+    ]
+
+
+def test_when_the_git_version_is_unknown_the_rebase_hint_stays(repo, monkeypatch, capsys):
+    def unknown():
+        raise GitShiftError("cannot parse git version")
+
+    base, stdin = wrong_below_a_right_tip(repo)
+    monkeypatch.setattr(gitconfig, "git_version", unknown)
+    assert guard.check_pre_push(repo, ["origin", url(repo)], stdin) == guard.BLOCK_EXIT
+    lines = capsys.readouterr().err.splitlines()
+    assert f'  then:     on main: git rebase -r --exec "{REAUTHOR}" {base}' in lines
+
+
 def test_the_rebase_hint_leaves_merged_commits_of_others_alone(repo, make_repo, tmp_path):
     base = commit(repo)
     assert push(repo).returncode == 0
@@ -221,20 +253,46 @@ def test_an_email_the_rebase_hint_cannot_quote_falls_back_with_a_warning(repo, m
     )
 
 
-def test_a_tag_gets_a_hint_it_can_follow(repo):
+def test_an_annotated_tag_gets_a_hint_that_keeps_it_annotated(repo):
     commit(repo)
     assert push(repo).returncode == 0
     bad = commit(repo, WRONG)
-    git(repo, "tag", "-a", "v1", "-m", "v1")  # an annotated tag: git hands over its own sha
+    git(repo, "tag", "-a", "v1", "-m", "v1")  # git hands over the tag object's own sha
     proc = push(repo, "v1")
     assert proc.returncode != 0
     assert run(repo, "ls-remote", "origin", "refs/tags/v1").stdout == ""
     lines = proc.stderr.splitlines()
     assert lines[1] == f"  {bad}  {WRONG}"
     assert (
-        "  then:     re-author them on their branch, then move the tag (git tag -f v1 <commit>)"
+        "  then:     re-author them on their branch, then move the tag (git tag -f -a v1 <commit>)"
         in lines
     )
+
+
+def test_a_lightweight_tag_gets_a_hint_that_keeps_it_lightweight(repo):
+    commit(repo, WRONG)
+    git(repo, "tag", "v2")
+    lines = push(repo, "v2").stderr.splitlines()
+    assert (
+        "  then:     re-author them on their branch, then move the tag (git tag -f v2 <commit>)"
+        in lines
+    )
+
+
+def test_when_git_cannot_tell_the_tag_type_the_hint_leaves_out_a(repo, monkeypatch, capsys):
+    commit(repo, WRONG)
+    git(repo, "tag", "-a", "v1", "-m", "v1")
+    real_run_git = gitconfig.run_git
+
+    def no_cat_file(*args, **kwargs):
+        if "cat-file" in args:
+            return subprocess.CompletedProcess(args, 128, "", "fatal: broken")
+        return real_run_git(*args, **kwargs)
+
+    monkeypatch.setattr(gitconfig, "run_git", no_cat_file)
+    stdin = f"refs/tags/v1 {git(repo, 'rev-parse', 'v1')} refs/tags/v1 {ZERO}\n"
+    assert guard.check_pre_push(repo, ["origin", url(repo)], stdin) == guard.BLOCK_EXIT
+    assert "(git tag -f v1 <commit>)\n" in capsys.readouterr().err
 
 
 def test_a_ref_that_is_no_branch_nor_tag_gets_a_general_hint(repo, capsys):

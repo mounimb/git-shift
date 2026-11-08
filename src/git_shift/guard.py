@@ -82,6 +82,7 @@ _REAUTHOR = "git commit --amend --reset-author --no-edit"
 _SHOWN = 10  # wrong commits listed before "… and N more"
 # emails a printed command can hold unquoted in sh, PowerShell ($) and cmd (%...%)
 _SHELL_SAFE = re.compile(r"[A-Za-z0-9._+@-]+")  # used with fullmatch
+_REBASE_MERGES = (2, 18)  # the first git with rebase -r
 
 
 def render_launcher(package_parent: str | None = None) -> str:
@@ -493,16 +494,35 @@ def _only_these(cwd: str | os.PathLike[str], tip: str, base: str | None, these: 
     return proc.returncode == 0 and set(proc.stdout.split()) <= these
 
 
+def _is_tag_object(cwd: str | os.PathLike[str], sha: str) -> bool:
+    """Whether sha is an annotated tag. False when git cannot tell."""
+    proc = gitconfig.run_git("--no-replace-objects", "cat-file", "-t", sha, cwd=cwd, check=False)
+    return proc.returncode == 0 and proc.stdout.strip() == "tag"
+
+
+def _has_rebase_merges() -> bool:
+    """Whether git has rebase -r (2.18 and later). True when the version cannot be read."""
+    try:
+        return gitconfig.git_version() >= _REBASE_MERGES
+    except GitShiftError:
+        return True
+
+
 def _reauthor_hint(
-    cwd: str | os.PathLike[str], ref: str, wrong: list[PushedCommit], listed: list[PushedCommit]
+    cwd: str | os.PathLike[str],
+    ref: str,
+    local_sha: str,
+    wrong: list[PushedCommit],
+    listed: list[PushedCommit],
 ) -> list[str]:
     """How to re-author the wrong commits of one pushed ref, whose new commits are listed
     (the tip first). Amend and rebase work on a branch, or on a detached HEAD."""
     if ref.startswith("refs/tags/"):
         tag = ref.removeprefix("refs/tags/")
+        annotated = "-a " if _is_tag_object(cwd, local_sha) else ""  # -f alone drops it
         return [
             "  then:     re-author them on their branch, then move the tag "
-            f"(git tag -f {tag} <commit>)"
+            f"(git tag -f {annotated}{tag} <commit>)"
         ]
     if not ref.startswith("refs/heads/") and ref != "HEAD":
         return [f"  then:     re-author them on a branch, then point {ref} at them"]
@@ -512,6 +532,12 @@ def _reauthor_hint(
         return [f"  then:     on {branch}: {_REAUTHOR}"]
     base = wrong[-1].parent  # of the oldest: children come before parents
     after = f"after {base}" if base else f"of {branch}"
+    if not _has_rebase_merges():  # by hand, then; -i alone flattens merges
+        return [
+            f"  then:     on {branch}: git rebase -i {base or '--root'}, "
+            'set the listed commits to "edit", at each:',
+            f"            {_REAUTHOR} && git rebase --continue",
+        ]
 
     def rebase(command: str) -> str:
         return f'  then:     on {branch}: git rebase -r --exec "{command}" {base or "--root"}'
@@ -570,7 +596,7 @@ def check_pre_push(cwd: str | os.PathLike[str], args: list[str], stdin_text: str
         seen.update(commit.sha for commit in new)
         bad = [c for c in new if not resolve.same_email(c.email, identity.email)]
         if bad and not hint:  # one hint, for the first ref with wrong commits
-            hint = _reauthor_hint(cwd, local_ref, bad, listed)
+            hint = _reauthor_hint(cwd, local_ref, local_sha, bad, listed)
         wrong += bad
     if not wrong:
         return 0
