@@ -176,6 +176,62 @@ def test_the_appended_include_respects_git_s_lock(home):
     assert store.list_identities() == []
 
 
+def test_a_read_only_global_config_is_left_alone(home):
+    # read-only dotfiles are not to be changed; on Windows the lock would stay behind too
+    config = home / ".gitconfig"
+    config.write_text(INCLUDE_THEN_USER, encoding="utf-8")
+    config.chmod(stat.S_IREAD)
+    try:
+        if os.access(config, os.W_OK):
+            pytest.skip("this user can write read-only files (root)")
+        before = config.read_bytes()
+        with pytest.raises(GitShiftError, match="is read-only") as error:
+            add(home)
+        assert str(error.value) == (
+            f"{paths.to_git_path(config)} is read-only: make it writable, "
+            "then run the command again"
+        )
+        assert config.read_bytes() == before
+        assert not (home / ".gitconfig.lock").exists()
+        assert list(paths.backups_dir().glob("gitconfig-*")) == []
+        assert store.list_identities() == []
+    finally:
+        config.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_a_failed_replace_leaves_no_lock_even_a_read_only_one(home, monkeypatch):
+    config = home / ".gitconfig"
+    config.write_text(INCLUDE_THEN_USER, encoding="utf-8")
+    before = config.read_bytes()
+    replace = store.replace_file
+
+    def failing(src, dst):
+        if not src.name.endswith(".lock"):
+            return replace(src, dst)
+        os.chmod(src, stat.S_IREAD)  # what copymode does for a read-only file
+        raise PermissionError(13, "Access is denied")  # as Windows says then
+
+    monkeypatch.setattr(store, "replace_file", failing)
+    with pytest.raises(GitShiftError, match="could not write") as error:
+        add(home)
+    assert "Access is denied" in str(error.value)
+    assert not (home / ".gitconfig.lock").exists()
+    assert config.read_bytes() == before
+
+
+def test_a_lock_that_cannot_be_removed_never_hides_the_first_error(home, monkeypatch):
+    (home / ".gitconfig").write_text(INCLUDE_THEN_USER + "\tname = Some \\", encoding="utf-8")
+    monkeypatch.setattr(store, "_remove_lock", lambda lock: OSError(16, "Device or resource busy"))
+    with pytest.raises(GitShiftError) as error:
+        add(home)
+    lock = paths.to_git_path(home / ".gitconfig.lock")
+    message = str(error.value)
+    assert message.startswith(f"did not change {paths.to_git_path(home / '.gitconfig')}: ")
+    assert message.endswith(
+        f"({lock} is left behind: delete it. [Errno 16] Device or resource busy)"
+    )
+
+
 def test_a_fresh_backup_is_taken_before_the_include_is_appended(home):
     # backup_global_config() copies the file only once ever: this write gets its own copy
     backups = paths.backups_dir()

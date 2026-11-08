@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import tempfile
 import time
 from dataclasses import dataclass
@@ -249,6 +250,8 @@ def _append_include(file: Path) -> None:
     real = Path(os.path.realpath(file))
     lock = real.with_name(real.name + ".lock")
     where = paths.to_git_path(real)
+    if not os.access(real, os.W_OK):  # whoever made their dotfiles read-only wants them kept
+        raise GitShiftError(f"{where} is read-only: make it writable, then run the command again")
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError as exc:
@@ -271,10 +274,28 @@ def _append_include(file: Path) -> None:
         shutil.copymode(real, lock)
         replace_file(lock, real)
     except BaseException as exc:
-        lock.unlink(missing_ok=True)
+        stuck = _remove_lock(lock)
+        note = f" ({paths.to_git_path(lock)} is left behind: delete it. {stuck})" if stuck else ""
+        if isinstance(exc, GitShiftError):
+            if not note:
+                raise
+            raise GitShiftError(f"{exc}{note}") from exc
         if isinstance(exc, OSError):
-            raise GitShiftError(f"could not write {where}: {exc}") from exc
-        raise
+            raise GitShiftError(f"could not write {where}: {exc}{note}") from exc
+        raise  # Ctrl-C and the like, as they are
+
+
+def _remove_lock(lock: Path) -> OSError | None:
+    """Remove our lock file, also once copymode made it read-only: Windows deletes no
+    read-only file. What goes wrong is returned, never raised, so that it never hides the
+    error that made us remove it. A lock left behind would fail every git config write."""
+    try:
+        if lock.exists():
+            os.chmod(lock, stat.S_IREAD | stat.S_IWRITE)
+        lock.unlink(missing_ok=True)
+    except OSError as exc:
+        return exc
+    return None
 
 
 def _check_appended(real: Path, lock: Path, where: str) -> None:
