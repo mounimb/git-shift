@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import gitconfig, paths
-from .errors import GitShiftError
+from .errors import GitCommandError, GitShiftError
 
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")  # used with fullmatch
 GIT_IDENT_CRUD = ",:;<>\"'\\"  # git strips these from both ends of a name or email
@@ -234,8 +234,12 @@ def _append_include(file: Path) -> None:
 
     The one place git-shift writes the global config as text: `git config --add` would put
     the path in the file's last [include] section, and a [user] section after it would then
-    beat every identity. git's lock file keeps a concurrent git config out meanwhile, and
-    appending in place keeps a symlinked file (dotfiles) and its mode as they are.
+    beat every identity. It writes as git does: the new content goes into git's lock file,
+    so a concurrent git config fails ("could not lock config file") instead of writing at
+    the same time. git must then read the lock file as the old entries plus the include,
+    or the real file stays untouched. The lock file then replaces the real one in one step,
+    with its mode: the symlink to it (dotfiles) stays a symlink, and a crash or a full disk
+    never leaves a partial line in it.
     """
     real = Path(os.path.realpath(file))
     lock = real.with_name(real.name + ".lock")
@@ -244,21 +248,47 @@ def _append_include(file: Path) -> None:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError as exc:
         raise GitShiftError(
-            f"could not lock {where}: {lock.name} exists, git is writing it"
+            f"could not lock {where}: {lock.name} exists, so a git command may be writing it; "
+            f"if no git command is running, delete {paths.to_git_path(lock)}"
         ) from exc
     except OSError as exc:
         raise GitShiftError(f"could not lock {where}: {exc}") from exc
     try:
-        data = real.read_bytes()
-        newline = b"" if not data or data.endswith(b"\n") else b"\n"
-        rules = _quoted(paths.to_git_path(paths.rules_file()))
-        with open(real, "ab") as config:
-            config.write(newline + f"[include]\n\tpath = {rules}\n".encode())
-    except OSError as exc:
-        raise GitShiftError(f"could not write {where}: {exc}") from exc
-    finally:
-        os.close(fd)
+        with os.fdopen(fd, "wb") as out:
+            data = real.read_bytes()
+            newline = b"" if not data or data.endswith(b"\n") else b"\n"
+            rules = _quoted(paths.to_git_path(paths.rules_file()))
+            out.write(data + newline + f"[include]\n\tpath = {rules}\n".encode())
+            out.flush()
+            os.fsync(out.fileno())
+        _check_appended(real, lock, where)
+        shutil.copymode(real, lock)
+        replace_file(lock, real)
+    except BaseException as exc:
         lock.unlink(missing_ok=True)
+        if isinstance(exc, OSError):
+            raise GitShiftError(f"could not write {where}: {exc}") from exc
+        raise
+
+
+def _check_appended(real: Path, lock: Path, where: str) -> None:
+    """git must read the lock file as the real file's entries plus the include, nothing
+    else: a last line ending with a backslash would continue into the new section."""
+    target = paths.to_git_path(paths.rules_file())
+    before = gitconfig.list_entries(file=real)
+    try:
+        after = gitconfig.list_entries(file=lock)
+    except GitCommandError as exc:
+        raise GitShiftError(
+            f"did not change {where}: with the git-shift include appended, git cannot read "
+            f"it: {exc.stderr}"
+        ) from exc
+    if after != [*before, ("include.path", target)]:
+        raise GitShiftError(
+            f"did not change {where}: with the git-shift include appended, git would read "
+            'the end of that file differently. Check its last line (one ending with "\\" '
+            "continues on the next line), then try again"
+        )
 
 
 def ensure_global_include() -> None:

@@ -1,3 +1,6 @@
+import os
+import stat
+
 import pytest
 from helpers import git
 
@@ -162,13 +165,45 @@ def test_the_appended_include_quotes_a_path_git_would_misread(home, monkeypatch,
     assert git(make_repo(home / "code" / "app"), "config", "user.email") == "perso@example.com"
 
 
-def test_the_appended_include_waits_for_git_s_lock(home):
+def test_the_appended_include_respects_git_s_lock(home):
     (home / ".gitconfig").write_text(INCLUDE_THEN_USER, encoding="utf-8")
-    (home / ".gitconfig.lock").write_text("", encoding="utf-8")  # git is writing it
-    with pytest.raises(GitShiftError, match="lock"):
+    lock = home / ".gitconfig.lock"
+    lock.write_text("", encoding="utf-8")  # git is writing it, or crashed meanwhile
+    with pytest.raises(GitShiftError, match="lock") as error:
         add(home)
+    assert f"if no git command is running, delete {paths.to_git_path(lock)}" in str(error.value)
     assert (home / ".gitconfig").read_text(encoding="utf-8") == INCLUDE_THEN_USER
     assert store.list_identities() == []
+
+
+def test_an_append_git_would_misread_leaves_the_file_untouched(home):
+    # a last line ending with \ continues on the next one: git would read
+    # user.name = "Some [include]" and a stray user.path
+    config = INCLUDE_THEN_USER + "\tname = Some \\"
+    (home / ".gitconfig").write_text(config, encoding="utf-8", newline="\n")
+    before = (home / ".gitconfig").read_bytes()
+    with pytest.raises(GitShiftError) as error:
+        add(home)
+    assert f"did not change {paths.to_git_path(home / '.gitconfig')}: " in str(error.value)
+    assert (home / ".gitconfig").read_bytes() == before
+    assert not (home / ".gitconfig.lock").exists()
+    assert store.list_identities() == []
+    assert gitconfig.get("user.name", scope="global") == "Some "
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need extra rights on Windows")
+def test_a_symlinked_global_config_stays_a_symlink(home, make_repo):
+    dotfiles = home / "dotfiles"
+    dotfiles.mkdir()
+    real = dotfiles / "gitconfig"
+    real.write_text(INCLUDE_THEN_USER, encoding="utf-8")
+    real.chmod(0o600)
+    (home / ".gitconfig").symlink_to(real)
+    add(home)
+    assert (home / ".gitconfig").is_symlink()
+    assert real.read_text(encoding="utf-8") == INCLUDE_THEN_USER + rules_section()
+    assert stat.S_IMODE(real.stat().st_mode) == 0o600
+    assert git(make_repo(home / "code" / "app"), "config", "user.email") == "perso@example.com"
 
 
 def test_an_include_section_at_the_end_takes_the_path_through_git(home):
