@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import gitconfig, paths, remotes
-from .errors import GitShiftError
+from .errors import GitCommandError
 from .store import GIT_IDENT_CRUD, Identity
 
 # ssh.github.com is GitHub's SSH over port 443 (ssh://git@ssh.github.com:443/owner/repo)
@@ -69,7 +69,8 @@ def _probe(cwd: str | os.PathLike[str], option: str, *absent: str) -> str | None
     stderr = proc.stderr.strip()
     if any(message in stderr.lower() for message in absent):  # git < 2.16: "Not a git ..."
         return None
-    raise GitShiftError(f"git failed here:\n{stderr or f'exit code {proc.returncode}'}")
+    said = stderr or f"exit code {proc.returncode}"
+    raise GitCommandError(f"git failed here:\n{said}", said)
 
 
 def repo_root(cwd: str | os.PathLike[str]) -> str | None:
@@ -162,9 +163,11 @@ def _worktree_config(cwd: str | os.PathLike[str]) -> str | None:
     return paths.to_git_path(Path(cwd) / proc.stdout.strip())
 
 
-def _classify(
+def classify(
     origin: gitconfig.Origin, identities: list[Identity], cwd: str | os.PathLike[str]
 ) -> tuple[str, str | None]:
+    """Where a value git reads in cwd comes from (Effective.source), and the identity's
+    name when it is an identity file."""
     if origin.kind != "file":
         return origin.kind, None
     path = paths.to_git_path(origin.path).casefold()  # origins are absolute
@@ -223,7 +226,7 @@ def effective(cwd: str | os.PathLike[str], identities: list[Identity]) -> Effect
     if origin is None or not origin.value:  # git skips an empty author.email
         key, origin = "user.email", gitconfig.get_with_origin("user.email", cwd=cwd)
     if origin is not None:
-        source, identity = _classify(origin, identities, cwd)
+        source, identity = classify(origin, identities, cwd)
         location = paths.to_git_path(origin.path) if origin.kind == "file" else None
         email = _clean_email(origin.value)
         return Effective(email, name, ssh, source, identity, location, key)

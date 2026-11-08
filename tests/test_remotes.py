@@ -1,6 +1,6 @@
 import pytest
 
-from git_shift.remotes import Remote, parse_remote
+from git_shift.remotes import Remote, parse_remote, uses_ssh
 
 
 @pytest.mark.parametrize(
@@ -46,3 +46,27 @@ def test_rejects_local_paths_and_incomplete_urls(url):
 def test_ssh_alias_host_is_kept_verbatim():
     # git@github-work:... aliases are not resolved; the remote check only knows github.com
     assert parse_remote("git@github-work:o/r").host == "github-work"
+
+
+@pytest.mark.parametrize(
+    ("url", "ssh"),
+    [
+        ("git@github.com:alice/app.git", True),
+        ("github.com:alice/app", True),
+        ("git@example.com:/srv/app.git", True),
+        ("ssh://git@github.com/alice/app.git", True),
+        ("SSH://git@github.com/alice/app.git", True),
+        ("git+ssh://git@github.com/alice/app.git", True),
+        ("ssh+git://git@github.com/alice/app.git", True),
+        ("https://github.com/alice/app.git", False),
+        ("git://example.com/app.git", False),
+        ("file:///srv/app.git", False),
+        ("/srv/app.git", False),
+        ("C:/repos/app", False),
+        ("C:\repos\app", False),
+        ("../app", False),
+        ("", False),
+    ],
+)
+def test_uses_ssh(url, ssh):
+    assert uses_ssh(url) is ssh

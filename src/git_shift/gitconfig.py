@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import paths
-from .errors import GitShiftError
+from .errors import GitCommandError, GitShiftError
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,8 @@ def run_git(
     except OSError as exc:
         raise GitShiftError(f"cannot run git: {exc}") from exc
     if check and proc.returncode != 0:
-        raise GitShiftError(f"`git {' '.join(args)}` failed: {proc.stderr.strip()}")
+        stderr = proc.stderr.strip()
+        raise GitCommandError(f"`git {' '.join(args)}` failed: {stderr}", stderr)
     return proc
 
 
@@ -89,7 +90,8 @@ def _read(args: list[str], cwd, env=None) -> str | None:
     if proc.returncode == 1:
         return None
     if proc.returncode != 0:
-        raise GitShiftError(f"git config failed: {proc.stderr.strip()}")
+        stderr = proc.stderr.strip()
+        raise GitCommandError(f"git config failed: {stderr}", stderr)
     return proc.stdout
 
 

@@ -131,7 +131,7 @@ def load(name: str) -> Identity:
     )
 
 
-def _identity_names() -> list[str]:
+def identity_names() -> list[str]:
     """Names of the identity files git-shift could have written, sorted."""
     directory = paths.identities_dir()
     if not directory.is_dir():
@@ -144,24 +144,32 @@ def _identity_names() -> list[str]:
 
 
 def list_identities() -> list[Identity]:
-    return [load(name) for name in _identity_names()]
+    return [load(name) for name in identity_names()]
+
+
+def rule_entries(identities: list[Identity]) -> list[tuple[str, str]]:
+    """The (key, value) entries write_rules writes, in order. Deeper folders come last so
+    they win."""
+    usable = [i for i in identities if i.folder]  # an empty gitdir pattern matches every repo
+    return [
+        (
+            f"includeIf.gitdir/i:{paths.gitdir_pattern(identity.folder)}.path",
+            paths.to_git_path(identity.path),
+        )
+        for identity in sorted(usable, key=lambda i: (paths.depth(i.folder), i.name))
+    ]
 
 
 def write_rules(identities: list[Identity]) -> None:
-    """Regenerate rules.gitconfig. Deeper folders come last so they win."""
+    """Regenerate rules.gitconfig from the identities."""
     rules = paths.rules_file()
     tmp = temp_beside(rules)
     try:
         tmp.write_text(
             "# Managed by git-shift. Do not edit by hand.\n", encoding="utf-8", newline="\n"
         )
-        usable = [i for i in identities if i.folder]  # an empty gitdir pattern matches every repo
-        for identity in sorted(usable, key=lambda i: (paths.depth(i.folder), i.name)):
-            gitconfig.set_value(
-                f"includeIf.gitdir/i:{paths.gitdir_pattern(identity.folder)}.path",
-                paths.to_git_path(identity.path),
-                file=tmp,
-            )
+        for key, value in rule_entries(identities):
+            gitconfig.set_value(key, value, file=tmp)
         replace_file(tmp, rules)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -339,6 +347,6 @@ def remove_identity(name: str) -> None:
     path = identity_path(name)
     if not path.is_file():
         raise GitShiftError(f'no identity named "{name}"')
-    remaining = [load(other) for other in _identity_names() if other != name]  # before changes
+    remaining = [load(other) for other in identity_names() if other != name]  # before changes
     path.unlink()
     write_rules(remaining)

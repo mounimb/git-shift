@@ -43,9 +43,11 @@ def email_text(eff: resolve.Effective) -> str:
     return eff.email or "(empty)"
 
 
-def mismatch(eff: resolve.Effective, expected: store.Identity, kind: str) -> str:
+def mismatch(
+    eff: resolve.Effective, expected: store.Identity, kind: str, *, from_doctor: bool = False
+) -> str:
     """Why git commits with another email than the expected identity's. kind: how the
-    identity matched (resolve.Match.kind)."""
+    identity matched (resolve.Match.kind). from_doctor: no "run git shift doctor"."""
     # first the overrides that a local user.email cannot beat
     if eff.key == "GIT_AUTHOR_EMAIL":
         return "GIT_AUTHOR_EMAIL is set in your environment"
@@ -68,7 +70,8 @@ def mismatch(eff: resolve.Effective, expected: store.Identity, kind: str) -> str
     if eff.source == "local":
         return "overridden by this repo's local config (.git/config)"
     if eff.source == "global" and kind == resolve.FOLDER:
-        return "your global git config overrides git-shift rules: run git shift doctor"
+        hint = "" if from_doctor else ": run git shift doctor"  # doctor names the cause
+        return f"your global git config overrides git-shift rules{hint}"
     return f'the email comes from {describe_source(eff)}, not from "{expected.name}"'
 
 

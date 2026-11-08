@@ -32,3 +32,17 @@ def parse_remote(url: str) -> Remote | None:
         return None
     repo = parts[-1].removesuffix(".git")
     return Remote(match.group("host").lower(), parts[0], repo)
+
+
+_SSH_SCHEME = re.compile(r"^(?:ssh|git\+ssh|ssh\+git)://", re.IGNORECASE)
+_SCP_LIKE = re.compile(r"^(?:[^@/]+@)?(?P<host>[^:/]+):")  # a colon before any slash
+
+
+def uses_ssh(url: str) -> bool:
+    """Whether git reaches this remote over SSH: an ssh:// URL, or the scp-like
+    [user@]host:path. A one-letter "host" is a Windows drive (C:/repo), a local path."""
+    url = url.strip()
+    if "://" in url:
+        return bool(_SSH_SCHEME.match(url))
+    match = _SCP_LIKE.match(url)
+    return match is not None and len(match.group("host")) > 1

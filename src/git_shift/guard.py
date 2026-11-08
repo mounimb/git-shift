@@ -225,6 +225,23 @@ def is_installed() -> bool:
     return bool(current) and _same_dir(current, paths.hooks_dir())
 
 
+def is_hooks_dir(value: str) -> bool:
+    """Whether a core.hooksPath value names the guard's hooks dir."""
+    return _same_dir(value, paths.hooks_dir())
+
+
+def overridden_by() -> gitconfig.Origin | None:
+    """The global core.hooksPath git uses instead of the guard's, when a global file sets
+    the guard's but git reads another one after it (an [include]), as install() warns.
+    [includeIf] never counts: _global_entries reads outside any repository."""
+    entries = _global_entries()
+    if not entries or is_hooks_dir(entries[-1].value):
+        return None
+    if not any(is_hooks_dir(entry.value) for entry in entries):
+        return None  # the guard is not installed at all
+    return entries[-1]
+
+
 def _chain_dir(value: str | None) -> str | None:
     if not value:
         return None

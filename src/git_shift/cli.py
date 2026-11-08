@@ -7,7 +7,7 @@ import os
 import sys
 from collections.abc import Callable
 
-from . import __version__, explain, gh, gitconfig, guard, paths, resolve, store
+from . import __version__, doctor, explain, gh, gitconfig, guard, paths, resolve, store
 from .errors import GitShiftError
 
 OK, WARN, ERR = "✓", "!", "✗"
@@ -187,12 +187,32 @@ def cmd_guard(args: argparse.Namespace) -> int:
     return 0
 
 
+_SYMBOLS = {doctor.OK: OK, doctor.WARN: WARN, doctor.ERROR: ERR}
+
+
+def _print_finding(finding: doctor.Finding) -> None:
+    first, *rest = finding.message.split("\n")  # git's own messages can span several lines
+    print(f"{_SYMBOLS[finding.level]} {first}")
+    for line in rest:
+        print(f"  {line}" if line.strip() else "")
+    if finding.fix:
+        print(f"  fix: {finding.fix}")
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    findings = doctor.run(os.getcwd())
+    for finding in findings:
+        _print_finding(finding)
+    return 1 if any(finding.level == doctor.ERROR for finding in findings) else 0
+
+
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "add": cmd_add,
     "list": cmd_list,
     "remove": cmd_remove,
     "status": cmd_status,
     "use": cmd_use,
+    "doctor": cmd_doctor,
     "guard": cmd_guard,
 }
 
@@ -226,6 +246,8 @@ def build_parser() -> argparse.ArgumentParser:
     use = sub.add_parser("use", help="pin an identity on the current repository")
     use.add_argument("name", metavar="IDENTITY")
     use.add_argument("--here", action="store_true", help="write it to this repo's config")
+
+    sub.add_parser("doctor", help="check your setup and say how to fix it")
 
     guard_parser = sub.add_parser("guard", help="block commits made with the wrong identity")
     guard_sub = guard_parser.add_subparsers(dest="guard_command", required=True, metavar="<action>")
