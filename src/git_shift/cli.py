@@ -261,7 +261,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--fix", action="store_true", help="rewrite rules.gitconfig from your identity files"
     )
 
-    guard_parser = sub.add_parser("guard", help="block commits made with the wrong identity")
+    guard_parser = sub.add_parser(
+        "guard", help="block commits and pushes made with the wrong identity"
+    )
     guard_sub = guard_parser.add_subparsers(dest="guard_command", required=True, metavar="<action>")
     guard_sub.add_parser("install", help="install the global hooks")
     guard_sub.add_parser("uninstall", help="remove the global hooks")

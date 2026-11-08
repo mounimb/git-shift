@@ -195,3 +195,9 @@ def test_missing_identity_name_is_called_identity(home, capsys):
     with pytest.raises(SystemExit):
         main(["add", "--email", "a@example.com", "--name", "perso", "--folder", str(home)])
     assert "IDENTITY" in capsys.readouterr().err
+
+
+def test_help_says_the_guard_blocks_pushes_too(capsys):
+    with pytest.raises(SystemExit):
+        main(["-h"])
+    assert "block commits and pushes made with the wrong identity" in capsys.readouterr().out
