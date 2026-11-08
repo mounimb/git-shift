@@ -113,13 +113,17 @@ def rules_up_to_date(identities: list[store.Identity]) -> bool:
 
 def _comparable(key: str, value: str) -> tuple[str, str]:
     """A rules entry as git reads it. git config --list lowercases the section and the name
-    but keeps the subsection (the includeIf condition)."""
+    but keeps the subsection, the includeIf condition. git matches the condition's keyword
+    exactly (GITDIR/I: never applies), and gitdir/i ignores A-Z case in the pattern only."""
     section, _, rest = key.partition(".")
     condition, _, name = rest.rpartition(".")
+    keyword, colon, pattern = condition.partition(":")
+    if keyword.endswith("/i"):
+        pattern = paths.fold_ascii(pattern)
     target = paths.expand(value)
     if not os.path.isabs(target):  # git resolves it from the file that includes it
         target = os.path.join(paths.rules_file().parent, target)
-    folded = f"{section.lower()}.{paths.fold_ascii(condition)}.{name.lower()}"
+    folded = f"{section.lower()}.{keyword}{colon}{pattern}.{name.lower()}"
     return folded, os.path.normcase(paths.to_git_path(target))
 
 

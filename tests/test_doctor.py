@@ -1,5 +1,7 @@
+import os
 import re
 import shlex
+import string
 import sys
 
 import pytest
@@ -346,12 +348,30 @@ def test_an_entry_added_to_the_rules_file_by_hand_is_out_of_date(home):
     assert only(doctor.run(str(home)), OUT_OF_DATE).level == doctor.ERROR
 
 
-def test_rules_that_differ_only_in_ascii_case_are_up_to_date(home):
-    # gitdir/i ignores A-Z case, as git does: the rule still matches
+ASCII_UPPER = str.maketrans(string.ascii_lowercase, string.ascii_uppercase)
+
+
+def test_a_pattern_that_differs_only_in_ascii_case_is_up_to_date(home, make_repo):
+    # gitdir/i ignores A-Z case in the pattern, so git still applies the rule. Only the
+    # pattern changes: the target path keeps its case, which counts on Linux.
     add(home)
     rules = paths.rules_file()
-    rules.write_text(rules.read_text(encoding="utf-8").upper(), encoding="utf-8")
+    text = rules.read_text(encoding="utf-8")
+    upper = re.sub(r'(gitdir/i:)([^"]*)', lambda m: m[1] + m[2].translate(ASCII_UPPER), text)
+    assert upper != text
+    rules.write_text(upper, encoding="utf-8")
+    assert git(make_repo(home / "code" / "app"), "config", "user.email") == "perso@example.com"
     assert none(doctor.run(str(home)), OUT_OF_DATE)
+
+
+def test_an_uppercased_condition_keyword_is_out_of_date(home, make_repo):
+    # git matches the keyword itself case-sensitively: GITDIR/I: never applies
+    add(home)
+    rules = paths.rules_file()
+    text = rules.read_text(encoding="utf-8")
+    rules.write_text(text.replace("gitdir/i:", "GITDIR/I:"), encoding="utf-8")
+    assert gitconfig.get("user.email", cwd=make_repo(home / "code" / "app")) is None
+    assert only(doctor.run(str(home)), OUT_OF_DATE).level == doctor.ERROR
 
 
 def test_a_hand_edited_folder_makes_the_rules_out_of_date_until_fix(home, make_repo, capsys):
@@ -368,12 +388,13 @@ def test_a_hand_edited_folder_makes_the_rules_out_of_date_until_fix(home, make_r
 
 
 def test_a_folder_that_resolves_differently_after_add_is_out_of_date(home):
-    # added before the folder existed; the folder created then has another spelling that
-    # the file system takes for the same one (Windows, macOS), but gitdir/i does not
+    # added before the folder existed; once ~/é exists, Windows resolves ~/É to it, but
+    # gitdir/i does not take É for é. Elsewhere É stays É (Linux: another folder; macOS:
+    # the same folder, but realpath keeps the spelling), and the rule still matches.
     store.add_identity("perso", email="perso@example.com", user_name="P", folder=str(home / "É"))
     (home / "é").mkdir()
-    if not (home / "É").exists():
-        pytest.skip("case-sensitive file system: É and é are two folders")
+    if os.path.realpath(home / "É") == str(home / "É"):
+        pytest.skip("the OS does not report another spelling")
     assert only(doctor.run(str(home)), OUT_OF_DATE).level == doctor.ERROR
 
 
