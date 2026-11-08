@@ -3,6 +3,7 @@ import re
 import shlex
 import string
 import sys
+import tempfile
 
 import pytest
 from helpers import GH_STATUS_SAMPLE, git, make_git_refuse, write_fake_gh
@@ -128,6 +129,24 @@ def test_git_older_than_2_13_is_an_error(home, monkeypatch):
     finding = only(doctor.run(str(home)), "git 2.12")
     assert finding.level == doctor.ERROR
     assert "2.13" in finding.message
+
+
+def test_without_a_temp_dir_doctor_and_fix_run_in_place(home, monkeypatch, capsys):
+    add(home)
+
+    def no_temp_dir(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")  # TMP not writable
+
+    monkeypatch.setattr(tempfile, "mkdtemp", no_temp_dir)
+    findings = doctor.run(str(home))
+    for text in ("1 identity: perso", "includes rules.gitconfig", "rules.gitconfig matches"):
+        assert only(findings, text).level == doctor.OK
+    # the guard's own reads need that dir: the guard check alone cannot run
+    assert only(findings, "could not check the guard").level == doctor.ERROR
+    capsys.readouterr()
+    assert main(["doctor", "--fix"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("✓ rules.gitconfig already matches your 1 identity: nothing to rewrite\n")
 
 
 def test_a_malformed_global_config_is_one_error_quoting_git(home, capsys):

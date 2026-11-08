@@ -36,17 +36,24 @@ class Origin:
 
 
 @contextmanager
-def outside_repositories() -> Iterator[None]:
+def outside_repositories(*, or_in_place: bool = False) -> Iterator[None]:
     """Meanwhile, git calls made without cwd run outside any repository: from a new empty
     dir whose parent is a ceiling, without the variables that name a repository. git then
     reads no .git/config, so a broken one in the current directory cannot fail them, and
     [includeIf] gitdir and onbranch are false while plain [include] still applies.
-    realpath: a Windows short name in the temp path would not match the ceiling."""
+    realpath: a Windows short name in the temp path would not match the ceiling.
+    or_in_place: when that dir cannot be made (TMP not writable), run where we are."""
     global _outside
     if _outside is not None:  # already outside
         yield
         return
-    directory = os.path.realpath(tempfile.mkdtemp(prefix="git-shift-"))
+    try:
+        directory = os.path.realpath(tempfile.mkdtemp(prefix="git-shift-"))
+    except OSError:
+        if not or_in_place:
+            raise
+        yield
+        return
     env: dict[str, str | None] = dict.fromkeys(REPOSITORY_ENV)
     env["GIT_CEILING_DIRECTORIES"] = os.path.dirname(directory)
     _outside = (directory, env)

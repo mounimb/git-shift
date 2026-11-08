@@ -42,7 +42,7 @@ def run(cwd: str | os.PathLike[str]) -> list[Finding]:
     other checks still run. Only the repository checks run from cwd: the others read the
     global config and git-shift's files from outside any repository, so a broken
     .git/config here is reported once, by the repository check."""
-    with gitconfig.outside_repositories():
+    with gitconfig.outside_repositories(or_in_place=True):  # TMP not writable: in place
         try:
             version = gitconfig.git_version()
         except GitCommandError as exc:  # even git --version reads the config: all git fails
@@ -68,7 +68,7 @@ def run(cwd: str | os.PathLike[str]) -> list[Finding]:
 
 def fix_rules() -> Finding:
     """Rewrite rules.gitconfig from the identity files, when they all load."""
-    with gitconfig.outside_repositories():
+    with gitconfig.outside_repositories(or_in_place=True):
         return _fix_rules()
 
 
