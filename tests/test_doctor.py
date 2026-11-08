@@ -9,6 +9,7 @@ from helpers import GH_STATUS_SAMPLE, git, make_git_refuse, write_fake_gh
 
 from git_shift import doctor, gh, gitconfig, guard, paths, resolve, store
 from git_shift.cli import main
+from git_shift.errors import GitCommandError
 
 OUT_OF_DATE = "rules.gitconfig is out of date"
 
@@ -506,6 +507,36 @@ def test_fix_leaves_the_rules_alone_when_an_identity_cannot_be_read(home, capsys
     assert out.startswith("✗ rules.gitconfig not rewritten: an identity file cannot be read\n")
     assert '✗ cannot read identity "pro"' in out
     assert rules.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("error", "said"),
+    [
+        (PermissionError(13, "Permission denied"), "Permission denied"),
+        (
+            GitCommandError(
+                "`git config ...` failed: error: could not lock", "error: could not lock"
+            ),
+            "error: could not lock",
+        ),
+    ],
+    ids=["os-error", "git-error"],
+)
+def test_fix_reports_a_failed_rewrite_and_still_runs_the_checks(
+    home, monkeypatch, capsys, error, said
+):
+    add(home)
+    paths.rules_file().unlink()
+
+    def failing(identities):
+        raise error
+
+    monkeypatch.setattr(store, "write_rules", failing)
+    capsys.readouterr()
+    assert main(["doctor", "--fix"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith(f"✗ could not rewrite rules.gitconfig: {said}\n")
+    assert f"✗ {OUT_OF_DATE}" in out  # the checks still ran
 
 
 def test_fix_never_writes_the_global_config(home, capsys):

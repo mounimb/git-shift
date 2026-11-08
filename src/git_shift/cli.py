@@ -202,14 +202,15 @@ def _print_finding(finding: doctor.Finding) -> None:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    if args.fix:
-        _print_finding(doctor.fix_rules())
+    fixed = [doctor.fix_rules()] if args.fix else []  # a failed write is a finding too
+    for finding in fixed:
+        _print_finding(finding)
     findings = doctor.run(os.getcwd())
     for finding in findings:
         _print_finding(finding)
     if args.fix and any(finding.level != doctor.OK for finding in findings):
         print("--fix only rewrites rules.gitconfig: run the other fixes yourself")
-    return 1 if any(finding.level == doctor.ERROR for finding in findings) else 0
+    return 1 if any(finding.level == doctor.ERROR for finding in fixed + findings) else 0
 
 
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {

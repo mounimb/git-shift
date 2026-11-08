@@ -83,7 +83,11 @@ def _fix_rules() -> Finding:
         fresh = False  # malformed: rewriting it is the fix
     if fresh:
         return Finding(OK, f"rules.gitconfig already matches your {count}: nothing to rewrite")
-    store.write_rules(identities)
+    try:
+        store.write_rules(identities)
+    except (GitShiftError, OSError) as exc:  # permissions, a locked file: the checks still run
+        said = _git_said(exc) if isinstance(exc, GitShiftError) else exc.strerror or str(exc)
+        return Finding(ERROR, f"could not rewrite rules.gitconfig: {said}")
     return Finding(OK, f"rewrote rules.gitconfig from your {count}")
 
 
