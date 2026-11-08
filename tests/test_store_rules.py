@@ -175,6 +175,19 @@ def test_three_levels_name_the_deepest_ssh_key(home):
     assert len(inherited) == 1 and "id_pro" in inherited[0]
 
 
+def test_inherited_ssh_keys_lists_every_pair_with_the_deepest_key(home):
+    add(home, "perso", "code", ssh_key=str(home / ".ssh" / "id_perso"))
+    add(home, "pro", "code/pro", ssh_key=str(home / ".ssh" / "id_pro"))
+    add(home, "lab", "code/pro/lab")
+    add(home, "docs", "code/docs")
+    add(home, "work", "work")
+    pairs = store.inherited_ssh_keys(store.list_identities())
+    assert [(inner.name, outer.name) for inner, outer in pairs] == [
+        ("docs", "perso"),
+        ("lab", "pro"),
+    ]
+
+
 def test_add_warns_about_a_user_include_if_after_the_git_shift_include(home):
     (home / ".gitconfig.work").write_text("[user]\n\temail = old@example.com\n", encoding="utf-8")
     (home / ".gitconfig").write_text(

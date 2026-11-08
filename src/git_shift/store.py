@@ -241,28 +241,39 @@ def global_author_overrides() -> list[str]:
     return sorted({key for key, _ in entries if key in AUTHOR_OVERRIDE_KEYS})
 
 
-def _inherited_ssh_key_warnings(new: Identity, existing: list[Identity]) -> list[str]:
-    """git applies every matching rule, so an identity without an SSH key inside another
-    identity's folder uses the SSH key of the deepest enclosing identity that has one."""
-    everyone = [i for i in [*existing, new] if i.folder]
-    warnings = []
-    for inner in everyone:
+def inherited_ssh_keys(identities: list[Identity]) -> list[tuple[Identity, Identity]]:
+    """(inner, outer) for each identity without an SSH key inside the folder of one with a
+    key: git applies every matching rule, so inner uses the SSH key of outer, the deepest
+    enclosing identity that has one."""
+    usable = [i for i in identities if i.folder]
+    pairs = []
+    for inner in usable:
         if inner.ssh_key:
             continue
         outers = [
             o
-            for o in everyone
+            for o in usable
             if o is not inner and o.ssh_key and paths.is_within(inner.folder, o.folder)
         ]
-        if not outers:
-            continue
-        outer = max(outers, key=lambda o: paths.depth(o.folder))
-        if new is inner or new is outer:
-            warnings.append(
-                f'"{inner.name}" is inside the folder of "{outer.name}" and has no SSH key, '
-                f"so git uses {outer.ssh_key} there"
-            )
-    return warnings
+        if outers:
+            pairs.append((inner, max(outers, key=lambda o: paths.depth(o.folder))))
+    return pairs
+
+
+def inherited_ssh_key_text(inner: Identity, outer: Identity) -> str:
+    return (
+        f'"{inner.name}" is inside the folder of "{outer.name}" and has no SSH key, '
+        f"so git uses {outer.ssh_key} there"
+    )
+
+
+def _inherited_ssh_key_warnings(new: Identity, existing: list[Identity]) -> list[str]:
+    """The inherited keys that involve the new identity, on either side."""
+    return [
+        inherited_ssh_key_text(inner, outer)
+        for inner, outer in inherited_ssh_keys([*existing, new])
+        if new is inner or new is outer
+    ]
 
 
 def add_identity(
