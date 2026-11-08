@@ -31,6 +31,9 @@ jobs:
           path: dist/
 
   publish:
+    # PyPI is opt-in: set the repository variable PUBLISH_TO_PYPI to "true" once a
+    # Trusted Publisher for this workflow exists on pypi.org.
+    if: vars.PUBLISH_TO_PYPI == 'true'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -45,16 +48,27 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    needs: publish
+    needs: [build, publish]
+    # runs when PyPI was published or skipped, never after a failed publish
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.publish.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+      - name: Take the release notes from CHANGELOG.md
+        run: |
+          awk -v version="${GITHUB_REF_NAME#v}" '
+            /^## \[/ { keep = index($0, "[" version "]") > 0; next }
+            /^\[[^]]+\]: / { next }
+            keep
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          test -s "$RUNNER_TEMP/notes.md" || { echo "::error::no CHANGELOG.md section for $GITHUB_REF_NAME"; exit 1; }
       - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md)."
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "git-shift ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md"
         env:
           GH_TOKEN: ${{ github.token }}

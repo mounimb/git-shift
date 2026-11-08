@@ -30,7 +30,9 @@ pipx install git+https://github.com/mounimb/git-shift
 ```
 
 This puts a `git-shift` executable on your `PATH`, so git runs it as `git shift`.
-`pip install git+https://github.com/mounimb/git-shift` works too.
+`pip install git+https://github.com/mounimb/git-shift` works too. To install a given
+release, add its tag (`...git-shift@v0.1.0`), or download the wheel from the
+[releases page](https://github.com/mounimb/git-shift/releases).
 
 ## Quick start
 

@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-08
+
+First release.
+
 ### Added
 
 - `add`, `list`, `remove`: identities (name, email, optional SSH key and GitHub login)
@@ -21,3 +25,6 @@ All notable changes to this project are documented here. The format follows
   commits and pushes made with the wrong identity. They chain to the repositories' own
   hooks and to a previous global `core.hooksPath`, fail open when git-shift itself fails,
   and can be bypassed with `--no-verify` or `GIT_SHIFT_SKIP=1`.
+
+[Unreleased]: https://github.com/mounimb/git-shift/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/mounimb/git-shift/releases/tag/v0.1.0
