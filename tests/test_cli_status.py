@@ -70,6 +70,19 @@ def test_status_and_use_compare_emails_the_way_git_records_them(
     assert main(["status"]) == 0
 
 
+def test_status_and_use_show_a_hand_edited_email_cleaned(home, make_repo, monkeypatch, capsys):
+    add(home)
+    path = store.identity_path("perso")
+    git(home, "config", "--file", str(path), "user.email", "<perso@example.com>")  # hand-edited
+    monkeypatch.chdir(make_repo(home / "code" / "app"))
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert 'expected: "perso" <perso@example.com>  (matched by folder ' in out
+    assert main(["use", "perso", "--here"]) == 0
+    assert capsys.readouterr().out == '✓ this repo now commits as perso@example.com ("perso")\n'
+
+
 def test_status_does_not_match_a_folder_git_does_not(home, make_repo, monkeypatch, capsys):
     # str.casefold makes these equal, gitdir/i does not: exit 1 would ask for a pointless fix
     add(home, "perso", "straße")

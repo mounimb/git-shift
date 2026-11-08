@@ -700,6 +700,18 @@ def test_a_global_email_beating_a_folder_rule_does_not_say_run_doctor(home, make
     assert only(findings, "after the git-shift include").level == doctor.ERROR  # the cause
 
 
+def test_a_hand_edited_email_is_shown_cleaned(home, make_repo):
+    add(home)
+    path = store.identity_path("perso")
+    git(home, "config", "--file", str(path), "user.email", "<perso@example.com>")
+    repo = make_repo(home / "code" / "app")
+    git(repo, "config", "user.email", "x@example.com")
+    finding = only(doctor.run(str(repo)), "this repo commits as")
+    assert finding.message.startswith(
+        'this repo commits as x@example.com, not perso@example.com ("perso"): '
+    )
+
+
 def test_a_local_author_email_has_a_fix_that_works(home, make_repo):
     add(home)
     repo = make_repo(home / "code" / "app")

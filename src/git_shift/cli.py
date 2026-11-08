@@ -98,7 +98,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     if match is None:
         print("expected: no identity matches this location")
     else:
-        print(f'expected: "{expected.name}" <{expected.email}>  (matched by {match.reason})')
+        email = resolve.clean_email(expected.email)  # as git records it: no <> from a hand edit
+        print(f'expected: "{expected.name}" <{email}>  (matched by {match.reason})')
     if root is None:
         return 0
     pin = explain.dangling_pin(cwd, identities, match)
@@ -148,7 +149,8 @@ def cmd_use(args: argparse.Namespace) -> int:
     identities = store.list_identities()
     eff = resolve.effective(cwd, identities)
     if resolve.same_email(eff.email, identity.email):
-        print(f'{OK} this repo now commits as {identity.email} ("{identity.name}")')
+        email = resolve.clean_email(identity.email)
+        print(f'{OK} this repo now commits as {email} ("{identity.name}")')
     else:
         print(
             f'{WARN} pinned "{identity.name}" on this repo, but git still commits as '

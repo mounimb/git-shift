@@ -186,7 +186,7 @@ def classify(
     return "other", None
 
 
-def _clean_email(email: str) -> str:
+def clean_email(email: str) -> str:
     """The email as git records it: crud stripped from both ends, then <, > and newlines
     dropped anywhere (ident.c, strbuf_addstr_without_crud)."""
     return email.strip(_EMAIL_CRUD).translate(_EMAIL_DELIMITERS)
@@ -195,7 +195,7 @@ def _clean_email(email: str) -> str:
 def same_email(one: str | None, other: str | None) -> bool:
     """True if git records the same address for both, ignoring case. A missing or empty
     email never equals a real one."""
-    return _clean_email(one or "").casefold() == _clean_email(other or "").casefold()
+    return clean_email(one or "").casefold() == clean_email(other or "").casefold()
 
 
 def _author_name(cwd: str | os.PathLike[str]) -> str | None:
@@ -219,7 +219,7 @@ def effective(cwd: str | os.PathLike[str], identities: list[Identity]) -> Effect
     ssh = os.environ.get("GIT_SSH_COMMAND") or gitconfig.get("core.sshCommand", cwd=cwd)
     env_email = os.environ.get("GIT_AUTHOR_EMAIL")
     if env_email is not None:  # git uses it even when empty
-        email = _clean_email(env_email)
+        email = clean_email(env_email)
         return Effective(email, name, ssh, "environment", key="GIT_AUTHOR_EMAIL")
     key, origin = "author.email", gitconfig.get_with_origin("author.email", cwd=cwd)
     configured = origin is not None  # any email key, even empty, stops git reading EMAIL
@@ -228,9 +228,9 @@ def effective(cwd: str | os.PathLike[str], identities: list[Identity]) -> Effect
     if origin is not None:
         source, identity = classify(origin, identities, cwd)
         location = paths.to_git_path(origin.path) if origin.kind == "file" else None
-        email = _clean_email(origin.value)
+        email = clean_email(origin.value)
         return Effective(email, name, ssh, source, identity, location, key)
     env_email = os.environ.get("EMAIL")
     if env_email and not configured and gitconfig.get("committer.email", cwd=cwd) is None:
-        return Effective(_clean_email(env_email), name, ssh, "environment", key="EMAIL")
+        return Effective(clean_email(env_email), name, ssh, "environment", key="EMAIL")
     return Effective(None, name, ssh, "unset")

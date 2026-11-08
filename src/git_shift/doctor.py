@@ -393,10 +393,10 @@ def _check_email(eff: resolve.Effective, match: resolve.Match) -> Finding:
             f"(matched by {match.reason})",
         )
     why = explain.mismatch(eff, expected, match.kind, from_doctor=True)
+    wanted = resolve.clean_email(expected.email)  # as git records it: no <> from a hand edit
     return Finding(
         ERROR,
-        f"this repo commits as {explain.email_text(eff)}, not {expected.email} "
-        f'("{expected.name}"): {why}',
+        f'this repo commits as {explain.email_text(eff)}, not {wanted} ("{expected.name}"): {why}',
         explain.mismatch_fix(eff, expected),
     )
 
