@@ -2,6 +2,7 @@
 run this Python and the real check. Nothing is ever pushed to the network."""
 
 import itertools
+import shlex
 
 import pytest
 from helpers import git, run, write_script
@@ -71,6 +72,28 @@ def url(repo):
     return git(repo, "remote", "get-url", "origin")
 
 
+def merge_from_a_teammate(repo, make_repo, tmp_path, email=OTHER):
+    """Fetch two commits by email from another bare remote and merge them. Returns their
+    full shas."""
+    upstream = bare(tmp_path / "upstream.git")
+    teammate = make_repo(tmp_path / "teammate", remote=str(upstream))
+    commit(teammate, email)
+    commit(teammate, email)
+    git(teammate, "push", "-q", "origin", "main")
+    git(repo, "remote", "add", "upstream", str(upstream))
+    git(repo, "fetch", "-q", "upstream")
+    git(repo, "merge", "-q", "--no-edit", "--allow-unrelated-histories", "upstream/main")
+    return git(repo, "log", "--format=%H", "upstream/main").split()
+
+
+def follow_hint(repo, stderr):
+    """Run the command of the "then:" line exactly as printed, with POSIX shell quoting."""
+    line = next(line for line in stderr.splitlines() if line.startswith("  then:"))
+    command = shlex.split(line.split(": ", 2)[2])  # "  then:     on main: <command>"
+    assert command[0] == "git"
+    git(repo, *command[1:])
+
+
 # what the check blocks, and how the hints fix it
 
 
@@ -124,6 +147,40 @@ def test_wrong_commits_back_to_the_root_get_a_root_rebase_hint(repo):
     git(repo, "rebase", "-q", "-r", "--exec", REAUTHOR, "--root")  # as shown
     proc = push(repo)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_the_rebase_hint_leaves_merged_commits_of_others_alone(repo, make_repo, tmp_path):
+    base = commit(repo)
+    assert push(repo).returncode == 0
+    bad = commit(repo, WRONG)
+    theirs = merge_from_a_teammate(repo, make_repo, tmp_path)  # after base, never checked
+    proc = push(repo)
+    assert proc.returncode != 0
+    lines = proc.stderr.splitlines()
+    assert lines[0].startswith("✗ git-shift: 1 commit to push is not authored by ")
+    assert lines[1] == f"  {bad}  {WRONG}"
+    reauthor = f"if git log -1 --format=%ae | grep -qixF -e {WRONG}; then {REAUTHOR}; fi"
+    assert f'  then:     on main: git rebase -r --exec "{reauthor}" {base}' in lines
+    assert f"            it re-authors only the commits after {base} by the emails above" in lines
+    follow_hint(repo, proc.stderr)
+    authors = dict(line.split(" ") for line in git(repo, "log", "--format=%H %ae").splitlines())
+    assert [authors.get(sha) for sha in theirs] == [OTHER, OTHER]  # same shas, same author
+    assert WRONG not in authors.values()
+    proc = push(repo)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_an_email_the_rebase_hint_cannot_quote_falls_back_with_a_warning(repo, make_repo, tmp_path):
+    base = commit(repo)
+    assert push(repo).returncode == 0
+    commit(repo, "o'neil@example.com")  # a quote: no shell-safe condition
+    merge_from_a_teammate(repo, make_repo, tmp_path)
+    lines = push(repo).stderr.splitlines()
+    assert f'  then:     on main: git rebase -r --exec "{REAUTHOR}" {base}' in lines
+    assert (
+        f"            this re-authors every commit after {base}, even ones that are not yours"
+        in lines
+    )
 
 
 def test_more_than_ten_wrong_commits_are_cut_short(repo):

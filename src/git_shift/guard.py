@@ -80,6 +80,8 @@ _HEX = re.compile(r"[0-9a-f]+")  # used with fullmatch
 _LOG_FORMAT = "%H%x00%h%x00%ae%x00%p"
 _REAUTHOR = "git commit --amend --reset-author --no-edit"
 _SHOWN = 10  # wrong commits listed before "… and N more"
+# emails a printed command can hold unquoted in sh, PowerShell ($) and cmd (%...%)
+_SHELL_SAFE = re.compile(r"[A-Za-z0-9._+@-]+")  # used with fullmatch
 
 
 def render_launcher(package_parent: str | None = None) -> str:
@@ -482,15 +484,43 @@ def _new_commits(
     return commits
 
 
-def _reauthor_hint(branch: str, wrong: list[PushedCommit], tip: PushedCommit) -> list[str]:
-    """How to re-author the wrong commits of one pushed branch."""
+def _only_these(cwd: str | os.PathLike[str], tip: str, base: str | None, these: set[str]) -> bool:
+    """Whether every commit a rebase onto base rewrites (base..tip, or all of tip for --root)
+    is one of these. False when git cannot tell."""
+    revs = [tip] if base is None else [tip, "--not", base]
+    proc = gitconfig.run_git("rev-list", *revs, cwd=cwd, check=False)
+    return proc.returncode == 0 and set(proc.stdout.split()) <= these
+
+
+def _reauthor_hint(
+    cwd: str | os.PathLike[str], branch: str, wrong: list[PushedCommit], listed: list[PushedCommit]
+) -> list[str]:
+    """How to re-author the wrong commits of one pushed branch, whose new commits are listed
+    (the tip first)."""
+    tip = listed[0]
     if wrong == [tip]:
         return [f"  then:     on {branch}: {_REAUTHOR}"]
     base = wrong[-1].parent  # of the oldest: children come before parents
     after = f"after {base}" if base else f"of {branch}"
+
+    def rebase(command: str) -> str:
+        return f'  then:     on {branch}: git rebase -r --exec "{command}" {base or "--root"}'
+
+    if _only_these(cwd, tip.sha, base, {commit.sha for commit in listed}):
+        return [rebase(_REAUTHOR), f"            this re-authors every commit {after}"]
+    # the rebase also rewrites commits the check left out, such as someone else's, merged
+    emails = list(dict.fromkeys(commit.email for commit in wrong))
+    if all(_SHELL_SAFE.fullmatch(email) for email in emails):
+        # with -r, picks left untouched fast-forward: those commits keep their sha
+        patterns = " ".join(f"-e {email}" for email in emails)
+        condition = f"if git log -1 --format=%ae | grep -qixF {patterns}; then {_REAUTHOR}; fi"
+        return [
+            rebase(condition),
+            f"            it re-authors only the commits {after} by the emails above",
+        ]
     return [
-        f'  then:     on {branch}: git rebase -r --exec "{_REAUTHOR}" {base or "--root"}',
-        f"            this re-authors every commit {after}",
+        rebase(_REAUTHOR),
+        f"            this re-authors every commit {after}, even ones that are not yours",
     ]
 
 
@@ -518,7 +548,7 @@ def check_pre_push(cwd: str | os.PathLike[str], args: list[str], stdin_text: str
         seen.update(commit.sha for commit in new)
         bad = [c for c in new if not resolve.same_email(c.email, identity.email)]
         if bad and not hint:  # one hint, for the first ref with wrong commits
-            hint = _reauthor_hint(local_ref.removeprefix("refs/heads/"), bad, listed[0])
+            hint = _reauthor_hint(cwd, local_ref.removeprefix("refs/heads/"), bad, listed)
         wrong += bad
     if not wrong:
         return 0
