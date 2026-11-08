@@ -456,9 +456,11 @@ def _new_commits(
     a few thousand refs would overflow a Windows command line. They are hex: never options."""
     revs = "".join(f"{sha}\n" for sha in tips) + "".join(f"^{sha}\n" for sha in published)
     proc = gitconfig.run_git(
+        "--no-replace-objects",  # a replace ref shows a lookalike; push sends the real commit
         "log",
         "--no-show-signature",
         "--topo-order",
+        "--encoding=UTF-8",  # never i18n.logOutputEncoding, which re-encodes %ae too
         f"--format={_LOG_FORMAT}",
         "--stdin",
         "--not",  # for --remotes only: the command line never negates what stdin gives
@@ -487,7 +489,7 @@ def _only_these(cwd: str | os.PathLike[str], tip: str, base: str | None, these: 
     """Whether every commit a rebase onto base rewrites (base..tip, or all of tip for --root)
     is one of these. False when git cannot tell."""
     revs = [tip] if base is None else [tip, "--not", base]
-    proc = gitconfig.run_git("rev-list", *revs, cwd=cwd, check=False)
+    proc = gitconfig.run_git("--no-replace-objects", "rev-list", *revs, cwd=cwd, check=False)
     return proc.returncode == 0 and set(proc.stdout.split()) <= these
 
 

@@ -361,6 +361,29 @@ def test_a_commit_the_remote_has_under_another_pushed_ref_is_not_new(repo, capsy
     assert capsys.readouterr().err == ""
 
 
+def test_a_replace_ref_cannot_hide_a_wrong_commit(repo):
+    commit(repo)
+    bad = commit(repo, WRONG)
+    wrong = git(repo, "rev-parse", "HEAD")
+    lookalike = git(repo, "commit-tree", f"{wrong}^{{tree}}", "-p", f"{wrong}^", "-m", "x")
+    git(repo, "replace", wrong, lookalike)  # authored by the configured, right email
+    assert git(repo, "log", "-1", "--format=%ae") == EMAIL  # what git shows now
+    proc = push(repo)  # but the push sends the wrong commit itself
+    assert proc.returncode != 0
+    assert f"\n  {bad}  {WRONG}\n" in proc.stderr
+
+
+def test_the_log_output_encoding_cannot_garble_an_email(home, make_repo, tmp_path):
+    add(home, "perso", "mé@example.com", "code")
+    guard.install()
+    repo = make_repo(home / "code" / "app", remote=str(bare(tmp_path / "origin.git")))
+    git(repo, "config", "i18n.logOutputEncoding", "ISO-8859-1")
+    commit(repo)  # as the identity: recorded in UTF-8
+    proc = push(repo)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+
+
 def test_input_git_never_sends_is_an_error(repo):
     with pytest.raises(GitShiftError, match="unexpected pre-push input"):
         guard.check_pre_push(repo, ["origin", url(repo)], "refs/heads/main not-a-sha\n")
