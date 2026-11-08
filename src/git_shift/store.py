@@ -240,11 +240,17 @@ def include_lands_last(file: Path) -> bool:
     file. git adds to the file's last [include] section, which can come before a [user]
     section: tried on a copy, so git decides."""
     target = paths.to_git_path(paths.rules_file())
-    with tempfile.TemporaryDirectory(prefix="git-shift-") as directory:
-        copy = Path(directory) / "config"
-        shutil.copyfile(file, copy)
-        gitconfig.add_value("include.path", target, file=copy)
-        return gitconfig.list_entries(file=copy)[-1:] == [("include.path", target)]
+    try:
+        with tempfile.TemporaryDirectory(prefix="git-shift-") as directory:
+            copy = Path(directory) / "config"
+            shutil.copyfile(file, copy)
+            gitconfig.add_value("include.path", target, file=copy)
+            return gitconfig.list_entries(file=copy)[-1:] == [("include.path", target)]
+    except OSError as exc:  # no writable temp dir
+        raise GitShiftError(
+            f"could not copy {paths.to_git_path(file)} to a temp dir, to see where git would "
+            f"add the include: {exc}"
+        ) from exc
 
 
 def _append_include(file: Path) -> None:

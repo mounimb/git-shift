@@ -1,5 +1,6 @@
 import os
 import stat
+import tempfile
 
 import pytest
 from helpers import git
@@ -248,6 +249,18 @@ def test_backups_made_in_the_same_second_never_overwrite_each_other(home, monkey
         "gitconfig-20260101-000000-000000",
         "gitconfig-20260101-000000-000000-2",
     ]
+
+
+def test_without_a_writable_temp_dir_add_fails_cleanly(home, monkeypatch):
+    (home / ".gitconfig").write_text(INCLUDE_THEN_USER, encoding="utf-8")
+
+    def no_temp_dir(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", no_temp_dir)
+    with pytest.raises(GitShiftError, match="Permission denied"):
+        add(home)
+    assert (home / ".gitconfig").read_text(encoding="utf-8") == INCLUDE_THEN_USER
 
 
 def test_a_fresh_backup_is_taken_before_the_include_is_appended(home):
