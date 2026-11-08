@@ -407,7 +407,7 @@ def check_pre_commit(cwd: str | os.PathLike[str]) -> int:
     lines = [  # a literal ✗: importing cli for ERR would be circular
         f'✗ git-shift: this repo belongs to "{identity.name}"{owner}, '
         f"but you are committing as {actual or '(no email)'}",
-        f"  expected: {identity.email}  (matched by {reason})",
+        f"  expected: {resolve.clean_email(identity.email)}  (matched by {reason})",
         f"  fix:      git shift use {identity.name} --here",
         "  why:      git shift status shows where the wrong email comes from",
         "  amend:    your own commit: add --reset-author; someone else's: --no-verify",
@@ -599,8 +599,9 @@ def check_pre_push(cwd: str | os.PathLike[str], args: list[str], stdin_text: str
     if not wrong:
         return 0
     count = "1 commit to push is" if len(wrong) == 1 else f"{len(wrong)} commits to push are"
+    expected = resolve.clean_email(identity.email)  # as git records it: no <> from a hand edit
     lines = [  # a literal ✗: importing cli for ERR would be circular
-        f'✗ git-shift: {count} not authored by "{identity.name}" <{identity.email}> '
+        f'✗ git-shift: {count} not authored by "{identity.name}" <{expected}> '
         f"(matched by {reason})",
         *(f"  {c.short}  {c.email or '(no email)'}" for c in wrong[:_SHOWN]),
     ]

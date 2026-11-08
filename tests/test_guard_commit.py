@@ -63,6 +63,15 @@ def test_the_right_identity_passes(repo):
     assert head(repo) == EMAIL
 
 
+def test_the_block_shows_a_hand_edited_email_cleaned(home, repo):
+    git(home, "config", "--file", str(store.identity_path("perso")), "user.email", f"<{EMAIL}>")
+    git(repo, "config", "user.email", WRONG)
+    proc = commit(repo)
+    assert proc.returncode != 0
+    assert f"\n  expected: {EMAIL}  (matched by folder " in proc.stderr
+    assert "<" not in proc.stderr
+
+
 def test_a_local_user_email_is_blocked_and_the_fix_works(repo, monkeypatch):
     git(repo, "config", "user.email", WRONG)
     proc = commit(repo)

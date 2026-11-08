@@ -135,6 +135,17 @@ def test_a_wrong_tip_is_blocked_and_the_fix_then_the_amend_hint_work(repo, monke
     assert published(repo) == git(repo, "rev-parse", "HEAD")
 
 
+def test_the_block_shows_a_hand_edited_email_cleaned(home, repo):
+    git(home, "config", "--file", str(store.identity_path("perso")), "user.email", f"<{EMAIL}>")
+    commit(repo, WRONG)
+    proc = push(repo)
+    assert proc.returncode != 0
+    assert proc.stderr.startswith(
+        f'✗ git-shift: 1 commit to push is not authored by "perso" <{EMAIL}> (matched by folder '
+    )
+    assert "<<" not in proc.stderr
+
+
 def test_when_git_already_records_the_right_email_only_the_commits_need_fixing(repo):
     bad = commit(repo, WRONG)  # say, made before git-shift
     lines = push(repo).stderr.splitlines()
