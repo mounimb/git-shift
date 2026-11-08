@@ -116,7 +116,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         problem = explain.mismatch(eff, expected, match.kind)
         _print_problem(ERR, problem, explain.mismatch_fix(eff, expected))
         code = 1
-    if expected is not None and explain.pushes_use_the_wrong_key(expected, eff, identities):
+    wrong_key = expected is not None and explain.pushes_use_the_wrong_key(expected, eff, identities)
+    if wrong_key and explain.pushes_over_ssh(cwd):  # last: it costs a git call
         _print_ssh_warning(expected, eff, identities)  # advice only, like the gh lines
     _print_gh(expected)
     return code

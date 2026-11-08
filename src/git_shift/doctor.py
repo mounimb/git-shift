@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import explain, gh, gitconfig, guard, paths, remotes, resolve, store
+from . import explain, gh, gitconfig, guard, paths, resolve, store
 from .errors import GitCommandError, GitShiftError
 
 OK, WARN, ERROR = "ok", "warn", "error"
@@ -429,9 +429,8 @@ def _check_ssh_key(
     """A keyed identity whose key is not in effect, when pushes to origin use SSH."""
     if not identity.ssh_key or eff.ssh_command == store.ssh_command(identity.ssh_key):
         return []
-    url = resolve.origin_url(cwd)
-    if url is None or not remotes.uses_ssh(url):
-        return []  # an HTTPS remote uses no SSH key
+    if not explain.pushes_over_ssh(cwd):
+        return []
     return [Finding(WARN, explain.ssh_problem(identity, eff), _ssh_fix(cwd, identity, identities))]
 
 

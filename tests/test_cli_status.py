@@ -529,12 +529,38 @@ def test_status_without_a_working_tree(home, make_repo, monkeypatch, capsys, ins
 
 # --- status warns when pushes would use the wrong key, and only then ----------------------
 
+SSH_ORIGIN = "git@github.com:alice/app.git"  # pushes use SSH, so the key matters
+
+
+@pytest.mark.parametrize(
+    ("folder", "remote"),
+    [
+        ("Desktop/side-project", "https://github.com/alice/side-project.git"),  # by owner
+        ("code/app", "https://github.com/alice/app.git"),
+        ("code/app", None),
+    ],
+    ids=["https-owner", "https-folder", "no-origin"],
+)
+def test_status_gives_no_ssh_warning_when_pushes_use_no_ssh(
+    home, make_repo, monkeypatch, capsys, folder, remote
+):
+    add(home, "keyed", "code", "--gh", "alice", "--ssh-key", str(home / ".ssh" / "id_keyed"))
+    repo = make_repo(home / folder, remote=remote)
+    git(repo, "config", "--local", "core.sshCommand", "ssh -i other")
+    git(home, "config", "--global", "user.email", "keyed@example.com")  # right email
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "ssh:      ssh -i other\n" in out
+    assert "for SSH" not in out and "fix:" not in out
+
 
 def test_status_warns_about_the_key_of_the_folder_after_a_pin(home, make_repo, monkeypatch, capsys):
     # the identity's email is right, so nothing else says that pushes use the other key
     add(home, "keyed", "code", "--ssh-key", str(home / ".ssh" / "id_keyed"))
     add(home, "pro", "work")
-    repo = make_repo(home / "code" / "app")
+    repo = make_repo(home / "code" / "app", remote=SSH_ORIGIN)
     monkeypatch.chdir(repo)
     assert main(["use", "pro", "--here"]) == 0
     capsys.readouterr()
@@ -557,7 +583,7 @@ def test_status_warns_when_the_ssh_variable_holds_the_key_of_another_identity(
     add(home, "keyed", "code", "--ssh-key", str(home / ".ssh" / "id_keyed"))
     add(home, "pro", "work")
     command = store.ssh_command(paths.to_git_path(home / ".ssh" / "id_keyed"))
-    monkeypatch.chdir(make_repo(home / "work" / "app"))
+    monkeypatch.chdir(make_repo(home / "work" / "app", remote=SSH_ORIGIN))
     monkeypatch.setenv("GIT_SSH_COMMAND", command)
     capsys.readouterr()
     assert main(["status"]) == 0
@@ -590,7 +616,7 @@ def test_status_warns_when_a_keyed_identity_does_not_use_its_key(
 ):
     key = home / ".ssh" / "id_keyed"
     add(home, "keyed", "code", "--ssh-key", str(key))
-    repo = make_repo(home / "code" / "app")
+    repo = make_repo(home / "code" / "app", remote=SSH_ORIGIN)
     for args in config:
         git(repo, "config", *args)
     monkeypatch.chdir(repo)

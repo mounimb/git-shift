@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 
-from . import gh, paths, resolve, store
+from . import gh, paths, remotes, resolve, store
 
 GH_HOST = "github.com"
 GH_TOKEN_VARIABLES = ("GH_TOKEN", "GITHUB_TOKEN")  # gh prefers GH_TOKEN on github.com
@@ -166,6 +166,13 @@ def gh_mismatch(login: str, accounts: list[gh.GhAccount]) -> tuple[str | None, s
 def written_ssh_commands(identities: list[store.Identity]) -> set[str]:
     """The commands git-shift writes, in a folder rule or with use --here."""
     return {store.ssh_command(identity.ssh_key) for identity in identities if identity.ssh_key}
+
+
+def pushes_over_ssh(cwd: str | os.PathLike[str]) -> bool:
+    """Whether pushes to origin use SSH, so the SSH key matters: an HTTPS origin, or none,
+    uses no key."""
+    url = resolve.origin_url(cwd)
+    return url is not None and remotes.uses_ssh(url)
 
 
 def pushes_use_the_wrong_key(
