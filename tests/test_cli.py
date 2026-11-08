@@ -41,6 +41,25 @@ def test_add_then_list(home, capsys):
     assert "perso" in listing and "me@example.com" in listing and "gh: mounimb" in listing
 
 
+def test_list_aligns_its_columns(home, capsys):
+    for name, email, folder, extra in [
+        ("perso", "jane@example.com", "code/perso", ["--gh", "jane"]),
+        ("work", "jane@work.example.com", "code/work", []),
+        ("lab", "lab@example.com", "lab", ["--gh", "jane-lab"]),
+    ]:
+        args = ["add", name, "--email", email, "--name", "Jane", "--folder", str(home / folder)]
+        assert main([*args, *extra]) == 0
+    capsys.readouterr()
+    assert main(["list"]) == 0
+    perso, work = (paths.to_folder_rule(home / "code" / name) for name in ("perso", "work"))
+    lab = paths.to_folder_rule(home / "lab").ljust(len(perso))
+    assert capsys.readouterr().out.splitlines() == [
+        f"lab    lab@example.com        {lab}  gh: jane-lab",
+        f"perso  jane@example.com       {perso}  gh: jane",
+        f"work   jane@work.example.com  {work}",  # no trailing spaces
+    ]
+
+
 def test_list_empty(home, capsys):
     assert main(["list"]) == 0
     assert "no identities yet" in capsys.readouterr().out

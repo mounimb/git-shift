@@ -35,11 +35,12 @@ def cmd_list(args: argparse.Namespace) -> int:
         print("no identities yet. Create one with:")
         print('  git shift add <identity> --email <email> --name "<your name>" --folder <dir>')
         return 0
-    width = max(len(identity.name) for identity in identities)
-    for identity in identities:
-        folder = identity.folder or "(no usable folder)"  # hand-edited file, see doctor
-        gh_part = f"  gh: {identity.gh}" if identity.gh else ""
-        print(f"{identity.name:<{width}}  {identity.email}  {folder}{gh_part}")
+    # hand-edited file without a usable folder: see doctor
+    rows = [(i.name, i.email, i.folder or "(no usable folder)", i.gh) for i in identities]
+    name_width, email_width, folder_width = (max(len(row[n]) for row in rows) for n in range(3))
+    for name, email, folder, login in rows:
+        line = f"{name:<{name_width}}  {email:<{email_width}}  "
+        print(line + (f"{folder:<{folder_width}}  gh: {login}" if login else folder))
     return 0
 
 
